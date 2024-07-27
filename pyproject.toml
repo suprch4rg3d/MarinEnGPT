@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "marinengpt-demo"
+version = "0.1.0"
+description = ""
+authors = ["suprch4rg3d <emmanueloikonomou@gmail.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+chainlit = "^1.1.306"
+llama-index = "^0.10.58"
+pymupdf = "^1.24.9"
+ocrmypdf = "^16.4.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
