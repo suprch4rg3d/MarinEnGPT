@@ -16,13 +16,13 @@ from llama_index.core import (
 from llama_index.llms.openai import OpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core.query_engine.retriever_query_engine import RetrieverQueryEngine
-from llama_index.core.callbacks import CallbackManager
+from llama_index.core.callbacks import CallbackManager # Callback Manager Is For Callback Handlers, Which Are Responsible for Listening the Intermediate Steps And Sending Them To UI
 from llama_index.core.service_context import ServiceContext
 
 
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-# Viewing Queries and Events Using Logging - LlamaIndex
+# Viewing Queries and Events Using Logging - LlamaIndex (Does Not Work)
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
@@ -37,6 +37,16 @@ except:
     index.storage_context.persist()
 
 
+@cl.set_starters # Show Prompt Suggestions To User At The Start Of A Conversation
+async def set_starters():
+    return [
+        cl.Starter(
+            label="Morning routine ideation",
+            message="Can you help me create a personalized morning routine that would help increase my productivity throughout the day? Start by asking me about my current habits and what activities energize me in the morning.",
+            # icon="/public/idea.svg",
+            ),
+        ]
+    
 @cl.on_chat_start # Handle New Chat Session 
 async def start():
     Settings.llm = OpenAI(
@@ -48,13 +58,16 @@ async def start():
     query_engine = index.as_query_engine(streaming=True, similarity_top_k=2)
     cl.user_session.set("query_engine", query_engine)
 
-    await cl.Message(
-        author="Assistant", content="Hello! Im an AI assistant. How may I help you?"
-    ).send()
-
+    # await cl.Message(
+    #     author="Assistant", content="Hello! Im an AI assistant. How may I help you?"
+    # ).send()
 
 @cl.on_message  # Handle Incoming Messages From UI
 async def main(message: cl.Message):
+    
+    # Get All The Messages In The Conversation In The OpenAI Format And Feed It To The LLM.
+    print(cl.chat_context.to_openai())
+    
     query_engine = cl.user_session.get("query_engine") # Type: RetrieverQueryEngine
 
     msg = cl.Message(content="", author="Assistant")
