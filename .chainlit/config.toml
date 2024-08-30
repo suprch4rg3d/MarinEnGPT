@@ -31,7 +31,7 @@ auto_tag_thread = true
 # Authorize users to spontaneously upload files with messages
 [features.spontaneous_file_upload]
     enabled = true
-    accept = ["*/*"]
+    accept = ["application/pdf"]
     max_files = 20
     max_size_mb = 500
 
@@ -53,7 +53,7 @@ edit_message = true
 
 [UI]
 # Name of the assistant.
-name = "Assistant"
+name = "MarinEnGPT"
 
 # Description of the assistant. This is used for HTML tags.
 # description = ""
@@ -65,7 +65,7 @@ default_collapse_content = true
 hide_cot = false
 
 # Link to your github repo. This will add a github button in the UI's header.
-# github = ""
+github = "https://github.com/suprch4rg3d/MarinEnGPT-Demo"
 
 # Specify a CSS file that can be used to customize the user interface.
 # The CSS file can be served from the public directory or via an external link.
@@ -87,31 +87,31 @@ hide_cot = false
 # custom_build = "./public/build"
 
 [UI.theme]
-    default = "dark"
+    default = "light"
     #layout = "wide"
     #font_family = "Inter, sans-serif"
 # Override default MUI light theme. (Check theme.ts)
 [UI.theme.light]
-    #background = "#FAFAFA"
-    #paper = "#FFFFFF"
+    background = "#CAD6DC"
+    paper = "#A1CEE7"
 
     [UI.theme.light.primary]
-        #main = "#F80061"
-        #dark = "#980039"
-        #light = "#FFE7EB"
+        main = "#4F5B6C"
+        dark = "#1C232B"
+        light = "#A9BDC8"
     [UI.theme.light.text]
         #primary = "#212121"
         #secondary = "#616161"
 
 # Override default MUI dark theme. (Check theme.ts)
 [UI.theme.dark]
-    #background = "#FAFAFA"
-    #paper = "#FFFFFF"
+    background = "#29323C"
+    paper = "#374152"
 
     [UI.theme.dark.primary]
-        #main = "#F80061"
-        #dark = "#980039"
-        #light = "#FFE7EB"
+        main = "#4F5B6C"
+        dark = "#1C232B"
+        light = "#A9BDC8"
     [UI.theme.dark.text]
         #primary = "#EEEEEE"
         #secondary = "#BDBDBD"
