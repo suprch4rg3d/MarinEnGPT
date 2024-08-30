@@ -1,6 +1,9 @@
 import os
 import sys
 import logging
+
+from ocr import ocr_generator
+
 import openai
 import chainlit as cl
 
@@ -32,7 +35,8 @@ try:
     # Load Index
     index = load_index_from_storage(storage_context)
 except:
-    documents = SimpleDirectoryReader("./data").load_data(show_progress=True)
+    ocr_generator("./data")
+    documents = SimpleDirectoryReader("./data", recursive=False).load_data(show_progress=True)
     index = VectorStoreIndex.from_documents(documents)
     index.storage_context.persist()
 
@@ -41,16 +45,21 @@ except:
 async def set_starters():
     return [
         cl.Starter(
-            label="Morning routine ideation",
-            message="Can you help me create a personalized morning routine that would help increase my productivity throughout the day? Start by asking me about my current habits and what activities energize me in the morning.",
-            # icon="/public/idea.svg",
+            label="What is Fe/Cu Ions Generating System?",
+            message="What is Fe/Cu Ions Generating System? The response should be short",
+            icon="/public/hammer.svg",
+            ),
+        cl.Starter(
+            label="What is the weather like in Athens?",
+            message="What is the weather like in Athens?",
+            icon="/public/weather-recommendation.svg",
             ),
         ]
     
 @cl.on_chat_start # Handle New Chat Session 
 async def start():
     Settings.llm = OpenAI(
-        model="gpt-3.5-turbo", temperature=0.1, max_tokens=1024, streaming=True
+        model="gpt-3.5-turbo", temperature=0.0, max_tokens=1024, streaming=True
     )
     Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
     Settings.context_window = 4096
