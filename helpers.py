@@ -6,4 +6,3 @@ def dd(obj):
     
 def d(obj):
     print(obj)
-    sys.exit()
