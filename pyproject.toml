@@ -14,6 +14,7 @@ pymupdf = "^1.24.9"
 ocrmypdf = "^16.4.2"
 clip = {git = "https://github.com/openai/CLIP.git"}
 llama-index-embeddings-clip = "^0.2.0"
+llama-index-tools-weather = "^0.2.0"
 
 
 [build-system]
