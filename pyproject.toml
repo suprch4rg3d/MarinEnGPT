@@ -8,13 +8,15 @@ package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.12"
-chainlit = "^1.1.402"
-llama-index = "^0.11.2"
-pymupdf = "^1.24.9"
-ocrmypdf = "^16.4.2"
 clip = {git = "https://github.com/openai/CLIP.git"}
-llama-index-embeddings-clip = "^0.2.0"
-llama-index-tools-weather = "^0.2.0"
+chainlit = "^1.3.2"
+llama-index = "^0.12.8"
+openai = "^1.58.1"
+pymupdf = "^1.25.1"
+ocrmypdf = "^16.7.0"
+pydantic = "2.10.1"
+llama-index-tools-weather = "^0.3.0"
+llama-index-embeddings-clip = "^0.3.1"
 
 
 [build-system]

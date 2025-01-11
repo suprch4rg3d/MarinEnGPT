@@ -45,38 +45,38 @@ class MarineEngineeringManual(BaseModel):
     related_manuals: Optional[List[str]] = Field(None, description="Titles of other manuals related to this one")
 
 # Example Usage
-manual = MarineEngineeringManual(
-    title="Advanced Marine Engineering Practices",
-    authors=[Author(name="John Doe", organization="Marine Tech Inc.", contact_info="john.doe@example.com")],
-    publication_date=date(2021, 7, 22),
-    edition="2nd Edition",
-    isbn="978-3-16-148410-0",
-    url="http://example.com/advanced-manual",
-    ship_types=["Tanker", "Cargo", "Cruise Ship"],
-    sections=[
-        Section(title="Introduction", start_page=1, end_page=10, summary="Overview of marine engineering practices"),
-        Section(title="Engines", start_page=11, end_page=50, summary="Detailed analysis of marine engines")
-    ],
-    pages=500,
-    language="English",
-    classification_code="620.16",
-    keywords=["marine", "engineering", "safety", "maintenance", "advanced"],
-    description="A comprehensive guide on advanced marine engineering practices.",
-    publisher="Marine Publishers",
-    publication_location="New York, USA",
-    revision_history=["1st Edition - 2018", "2nd Edition - 2021"],
-    diagrams_url="http://example.com/diagrams",
-    references=["Marine Standards 2020", "Safety Protocols 2019"],
-    specifications=[
-        Specification(type="Engine Specifications", details="Details about various types of marine engines"),
-        Specification(type="Safety Equipment", details="List and description of safety equipment")
-    ],
-    appendices=["Appendix A - Glossary", "Appendix B - Index"],
-    notes="This manual is intended for advanced marine engineers.",
-    safety_information="Ensure proper safety protocols are followed when using this manual.",
-    compliance_standards=["ISO 9001", "IMO Safety Standards"],
-    review_date=date(2023, 6, 1),
-    related_manuals=["Marine Engineering Basics", "Ship Maintenance Guide"]
-)
+    # manual = MarineEngineeringManual(
+    #     title="Advanced Marine Engineering Practices",
+    #     authors=[Author(name="John Doe", organization="Marine Tech Inc.", contact_info="john.doe@example.com")],
+    #     publication_date=date(2021, 7, 22),
+    #     edition="2nd Edition",
+    #     isbn="978-3-16-148410-0",
+    #     url="http://example.com/advanced-manual",
+    #     ship_types=["Tanker", "Cargo", "Cruise Ship"],
+    #     sections=[
+    #         Section(title="Introduction", start_page=1, end_page=10, summary="Overview of marine engineering practices"),
+    #         Section(title="Engines", start_page=11, end_page=50, summary="Detailed analysis of marine engines")
+    #     ],
+    #     pages=500,
+    #     language="English",
+    #     classification_code="620.16",
+    #     keywords=["marine", "engineering", "safety", "maintenance", "advanced"],
+    #     description="A comprehensive guide on advanced marine engineering practices.",
+    #     publisher="Marine Publishers",
+    #     publication_location="New York, USA",
+    #     revision_history=["1st Edition - 2018", "2nd Edition - 2021"],
+    #     diagrams_url="http://example.com/diagrams",
+    #     references=["Marine Standards 2020", "Safety Protocols 2019"],
+    #     specifications=[
+    #         Specification(type="Engine Specifications", details="Details about various types of marine engines"),
+    #         Specification(type="Safety Equipment", details="List and description of safety equipment")
+    #     ],
+    #     appendices=["Appendix A - Glossary", "Appendix B - Index"],
+    #     notes="This manual is intended for advanced marine engineers.",
+    #     safety_information="Ensure proper safety protocols are followed when using this manual.",
+    #     compliance_standards=["ISO 9001", "IMO Safety Standards"],
+    #     review_date=date(2023, 6, 1),
+    #     related_manuals=["Marine Engineering Basics", "Ship Maintenance Guide"]
+    # )
 
-print(manual)
+    # print(manual)
