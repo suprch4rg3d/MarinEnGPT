@@ -4,6 +4,8 @@ import json
 import openai
 import time
 import logging
+import pyperclip
+import requests
 from helpers import *
 
 # Logging Configuration
@@ -279,7 +281,7 @@ def download_batch_results(result_file_id, output_file):
         # Write the binary content to the output file
         with open(output_file, "wb") as f:
             f.write(result_file.read())
-        
+
         logging.info(f"Results downloaded: {output_file}")
         print(f"Results downloaded: {output_file}")
     except Exception as e:
@@ -317,53 +319,274 @@ def save_responses_as_markdown(result_file, output_folder):
         raise
 
 
+def cancel_batch(batch_id):
+    """
+    Cancels an ongoing batch.
+
+    Args:
+        batch_id (str): Batch ID assigned by OpenAI.
+
+    Raises:
+        Exception: If there is an error during cancellation.
+    """
+    confirm = (
+        input(f"Are you sure you want to cancel Batch ID {batch_id}? (yes/no): ")
+        .strip()
+        .lower()
+    )
+    if confirm == "yes":
+        try:
+            openai.batches.cancel(batch_id)
+            logging.info(f"Batch with ID {batch_id} is being cancelled.")
+            print(
+                f"Batch with ID {batch_id} is being cancelled. It may take up to 10 minutes to complete the cancellation process."
+            )
+        except Exception as e:
+            logging.error(f"Error cancelling batch with ID {batch_id}: {e}")
+            raise
+    else:
+        print("Cancellation aborted.")
+
+
+def list_batches(limit=10, after=None):
+    """
+    Lists batches with optional pagination and allows copying the full batch ID.
+
+    Args:
+        limit (int): Number of batches to list per page (default is 10).
+        after (str, optional): Cursor for pagination to fetch results after a specific batch.
+
+    Returns:
+        None
+    """
+    try:
+        params = {"limit": limit}
+        if after:
+            params["after"] = after
+
+        # Retrieve batches with pagination
+        response = openai.batches.list(**params)
+
+        # Store batch IDs for clipboard functionality
+        batch_ids = {}
+
+        # Display header
+        print("\n=== Batches ===")
+        print(
+            f"{'Index':<6} {'Batch ID (truncated)':<20} {'Status':<15} {'Created At':<20} {'Metadata':<30}"
+        )
+        print("-" * 100)
+
+        # Display only the limited number of batches
+        for i, batch in enumerate(response, start=1):
+            truncated_id = batch.id[:8] + "..." + batch.id[-8:]  # Truncate the ID
+            metadata_desc = (
+                batch.metadata.get("description", "N/A") if batch.metadata else "N/A"
+            )
+            created_at_formatted = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.gmtime(batch.created_at)
+            )
+            print(
+                f"{i:<6} {truncated_id:<20} {batch.status:<15} {created_at_formatted:<20} {metadata_desc:<30}"
+            )
+            batch_ids[i] = batch.id  # Store the full batch ID for each index
+
+            # Stop after reaching the limit BECAUSE FOR SOME REASON API DOES NOT WORK??!
+            if i >= limit:
+                break
+
+        print("-" * 100)
+
+        # Display the next cursor for pagination
+        next_cursor = getattr(response, "after", None)
+        if next_cursor:
+            print(f"Next Cursor: {next_cursor}\n")
+        else:
+            print("No more batches.\n")
+
+        # Allow user to copy a batch ID
+        choice = input(
+            "Enter the index of the batch to copy its full ID (or press Enter to skip): "
+        ).strip()
+        if choice.isdigit():
+            index = int(choice)
+            if index in batch_ids:
+                full_id = batch_ids[index]
+                pyperclip.copy(full_id)
+                print(f"Full Batch ID copied to clipboard: {full_id}")
+            else:
+                print("Invalid index. No ID copied.")
+        else:
+            print("No ID selected for copying.")
+
+    except Exception as e:
+        logging.error(f"Error listing batches: {e}")
+        print(f"An error occurred: {e}")
+
+
+def get_openai_balance():
+    """
+    Retrieves and displays the current OpenAI API balance, or explains the restriction if unavailable.
+
+    Returns:
+        dict: A dictionary containing total and remaining credits, or None if the balance cannot be retrieved.
+    """
+    try:
+        # OpenAI API endpoint for billing/credits
+        url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
+        headers = {
+            "Authorization": f"Bearer {openai.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Make the GET request
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+
+        # Parse the response JSON
+        data = response.json()
+        total_granted = data.get("total_granted", 0.0)
+        total_used = data.get("total_used", 0.0)
+        total_available = total_granted - total_used
+
+        # Display the balance information
+        print("\n=== OpenAI API Balance ===")
+        print(f"Total Granted Credits: ${total_granted:.2f}")
+        print(f"Total Used Credits: ${total_used:.2f}")
+        print(f"Total Available Credits: ${total_available:.2f}")
+        print("==========================\n")
+        return {
+            "total_granted": total_granted,
+            "total_used": total_used,
+            "total_available": total_available
+        }
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401 or "session key" in e.response.text:
+            print("\n=== Balance Retrieval Restricted ===")
+            print(
+                "The OpenAI API key you are using cannot access balance information because the "
+                "endpoint `/v1/dashboard/billing/credit_grants` is restricted to session keys. "
+                "Session keys are used for browser-based contexts where user authentication occurs.\n"
+            )
+            print(
+                "At the moment, OpenAI does not provide an endpoint for balance retrieval using a "
+                "server-side secret API key. This functionality may be updated or introduced in the future.\n"
+            )
+            print(
+                "To check your balance, please log in to the OpenAI Dashboard and navigate to the "
+                "Billing or Usage section:\n"
+                "https://platform.openai.com/account/usage\n"
+            )
+            print("==========================\n")
+        else:
+            logging.error(f"Error retrieving API balance: {e}")
+            print(f"An error occurred while retrieving the balance: {e}")
+        return None
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error retrieving API balance: {e}")
+        print(f"An error occurred while retrieving the balance: {e}")
+        return None
+
+
 def display_instruction_manual():
     """
     Displays a detailed instruction manual for the user.
     """
     manual = """
-=== Instruction Manual ===
+=== OpenAI Batch Processing Tool ===
+
+This tool provides an interactive menu to handle batch processing workflows with OpenAI's API.
+
+=== Features and Instructions ===
 
 1. Configure Paths
-   - Update the paths for input folder, batch input file, output file, and output folder.
+   - Update the paths for:
+     - Input folder (where your images are stored).
+     - Batch input file (.jsonl file containing requests).
+     - Batch output file (location to save processed results).
+     - Output folder (to save Markdown files for processed results).
 
-2. Create Batch Input File (.jsonl)
-   - Generate a `.jsonl` file from images in the specified input folder.
+2. Set max_tokens
+   - Set the maximum number of tokens for responses generated by the model (default: 512).
 
-3. Use Existing Batch Input File (.jsonl)
-   - Reuse a pre-existing `.jsonl` file without recreating it.
+3. Create Batch Input File (.jsonl)
+   - Generate a `.jsonl` file from images in the input folder.
+   - Each request will include system and user prompts, the image, and settings for model processing.
 
-4. Upload Batch Input File
-   - Upload the `.jsonl` file to OpenAI for batch processing.
+4. Use Existing Batch Input File (.jsonl)
+   - Reuse a pre-existing `.jsonl` file without creating a new one.
 
-5. Create and Submit Batch Request
+5. Upload Batch Input File
+   - Upload a `.jsonl` file to OpenAI for batch processing.
+   - You will receive a File ID for the uploaded file.
+
+6. Create and Submit Batch Request
    - Use the File ID to submit a batch processing job.
+   - Specify:
+     - Completion window (default: 24h).
+     - Metadata description (default: "Default batch job").
+   - You will receive a Batch ID for the submitted job.
 
-6. Monitor Batch Processing
-   - Check the status of your batch job using the Batch ID.
+7. Monitor Batch Processing
+   - Enter the Batch ID to check the job's current status.
+   - Supported statuses:
+     - `validating`: Input file is being validated.
+     - `in_progress`: Batch is being processed.
+     - `finalizing`: Results are being prepared.
+     - `completed`: Results are ready.
+     - `expired`: Batch was not completed within the specified window.
+     - `cancelling`: Batch is being cancelled.
+     - `cancelled`: Batch was cancelled.
+   - If the batch is completed, you will get the Result File ID.
 
-7. Download Batch Results
-   - Download processed results using the Result File ID.
+8. Download Batch Results
+   - Enter the Result File ID to download the results file.
+   - The results will be saved to the specified batch output file.
 
-8. Save Responses as Markdown
-   - Save responses from the results file into Markdown format.
+9. Save Responses as Markdown
+   - Convert responses from the results file into Markdown files.
+   - Each file will include the content from the response for better readability.
 
-9. Change API URL
-   - Dynamically update the API endpoint URL.
+10. Change API URL
+    - Update the OpenAI API endpoint URL. 
+    - Default: `/v1/chat/completions`.
 
-10. Change Model
-   - Update the model being used for processing.
+11. Change Model
+    - Update the model being used for processing requests (e.g., `gpt-4`, `gpt-4-vision`).
 
-11. View Instruction Manual
-   - Display this detailed guide.
+12. View Instruction Manual
+    - Displays this guide.
 
-12. Exit
-   - Exit the program.
+13. Cancel Batch
+    - Enter the Batch ID to cancel an ongoing batch.
+    - Confirm before proceeding with cancellation.
+    - It may take up to 10 minutes for the batch status to change to `cancelled`.
 
-===========================
+14. List All Batches
+    - View batches with optional pagination:
+      - Specify the number of batches to list (default: 10).
+      - Use the cursor for pagination to fetch additional results.
+    - Displays:
+      - Batch ID (truncated for readability).
+      - Status (e.g., `completed`, `in_progress`).
+      - Created time (formatted for clarity).
+      - Metadata description (if available).
+    - Option to copy the full Batch ID to your clipboard for further use.
+
+0. Terminate
+   - Exit the program gracefully.
+
+=== Notes ===
+- Ensure your OpenAI API key is set in the environment variable `OPENAI_API_KEY`.
+- You can use `pyperclip` to copy Batch IDs or other information as needed.
+- If any errors occur, detailed logs are stored in `ocr_openai.log`.
+
+===============================
 """
     print(manual)
-    logging.info("Displayed the instruction manual.")
+    logging.info("Displayed the updated instruction manual.")
 
 
 # Main Menu
@@ -419,8 +642,11 @@ ___  ___              _         _____        _____ ______  _____
         print(f"10. Change API URL (current: {url})")
         print(f"11. Change Model (current: {model})")
         print("12. View Instruction Manual")
+        print("13. Cancel Batch")
+        print("14. List All Batches")
+        print("15. Check OpenAI API Balance")
 
-        choice = input("\nEnter your choice: ")
+        choice = input("\nEnter your choice: \t ")
 
         try:
             if choice == "1":
@@ -448,7 +674,6 @@ ___  ___              _         _____        _____ ______  _____
                 print(
                     f"Paths updated:\nInput Folder: {input_folder}\nBatch Input File: {batch_input_file}\nBatch Output File: {batch_output_file}\nOutput Folder: {output_folder}"
                 )
-                input("\nPress Enter or Space to return to the menu...")
             elif choice == "2":
                 # Update max_tokens
                 max_tokens_input = input(
@@ -534,14 +759,35 @@ ___  ___              _         _____        _____ ______  _____
             elif choice == "12":
                 # View instruction manual
                 display_instruction_manual()
+            elif choice == "13":
+                # Cancel a batch
+                batch_id = input("Enter Batch ID to cancel: ")
+                cancel_batch(batch_id)
+            elif choice == "14":
+                # List all batches
+                limit = input(
+                    "Enter the number of batches to list (default: 10): "
+                ).strip()
+                limit = int(limit) if limit.isdigit() else 10
+                after = (
+                    input("Enter the cursor for pagination (optional): ").strip()
+                    or None
+                )
+                list_batches(limit=limit, after=after)
+            elif choice == "15":
+                # Check OpenAI API Balance
+                get_openai_balance()
             elif choice == "0":
-                # Exit
-                print("Exiting. Goodbye!")
+                print("\nExiting the program...\n\nBye.")
                 break
             else:
                 print("Invalid choice. Please try again.")
         except Exception as e:
             print(f"An error occurred: {e}")
+        finally:
+            if choice != "0":
+                # Pause before returning to the menu
+                input("\nPress Enter to return to the menu...")
 
 
 # Main Execution

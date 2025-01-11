@@ -17,6 +17,7 @@ ocrmypdf = "^16.7.0"
 pydantic = "2.10.1"
 llama-index-tools-weather = "^0.3.0"
 llama-index-embeddings-clip = "^0.3.1"
+pyperclip = "^1.9.0"
 
 
 [build-system]
