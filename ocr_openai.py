@@ -7,6 +7,7 @@ import logging
 import pyperclip
 import requests
 from helpers import *
+import importlib.util
 
 # Logging Configuration
 logging.basicConfig(
@@ -43,9 +44,12 @@ def construct_request_object(
     image_b64,
     max_tokens=512,
     url="/v1/chat/completions",
+    structured_output_enabled=False,
+    pydantic_schema_path=None,
+    schema_class_name="MarineEngineeringManual",
 ):
     """
-    Constructs a request object for the OpenAI API.
+    Constructs a request object for the OpenAI API, optionally integrating Structured Output(See more about Structured Output API @ https://platform.openai.com/docs/guides/structured-outputs).
 
     Args:
         custom_id (str): Unique identifier for the request.
@@ -55,11 +59,16 @@ def construct_request_object(
         image_b64 (str): Base64-encoded image string.
         max_tokens (int, optional): Maximum number of tokens for the response. Defaults to 512.
         url (str, optional): API endpoint URL. Defaults to "/v1/chat/completions".
+        structured_output_enabled (bool, optional): Enable Structured Output if True.
+        pydantic_schema_path (str, optional): Path to the Python file containing the Pydantic schema.
+        schema_class_name (str, optional): Name of the schema class in the Pydantic file.
 
     Returns:
         dict: Request object.
     """
-    return {
+    logging.info(f"Constructing request object for custom_id: {custom_id}")
+
+    request = {
         "custom_id": custom_id,
         "method": "POST",
         "url": url,
@@ -88,6 +97,55 @@ def construct_request_object(
         },
     }
 
+    # Structured Output
+    if structured_output_enabled and pydantic_schema_path:
+        try:
+            logging.info("Structured Output is enabled. Attempting to load schema...")
+            # Dynamically load the Pydantic schema
+            spec = importlib.util.spec_from_file_location(
+                "schema", pydantic_schema_path
+            )
+            schema_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(schema_module)
+
+            # Load the specified schema class
+            schema_class = getattr(schema_module, schema_class_name, None)
+            if schema_class:
+                # Generate schema for response_format
+                request["body"]["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_class_name,
+                        "schema": schema_class.model_json_schema(),
+                    },
+                }
+                logging.info(
+                    f"Schema '{schema_class_name}' from '{pydantic_schema_path}' was successfully loaded and applied."
+                )
+                print(
+                    f"Structured Output integrated into request with schema '{schema_class_name}'."
+                )
+            else:
+                logging.error(
+                    f"Schema class '{schema_class_name}' not found in the specified file."
+                )
+                print(
+                    f"Schema class '{schema_class_name}' not found. Structured Output not applied!"
+                )
+        except Exception as e:
+            logging.error(
+                f"Error loading Pydantic schema from {pydantic_schema_path}: {e}"
+            )
+            print(f"An error occurred while loading the schema: {e}")
+    else:
+        if not structured_output_enabled:
+            logging.info("Structured Output is disabled. Proceeding without schema.")
+        elif not pydantic_schema_path:
+            logging.warning("Structured Output enabled, but no schema path provided.")
+
+    logging.debug(f"Constructed request object: {json.dumps(request, indent=2)}")
+    return request
+
 
 def create_batch_input_jsonl(
     input_folder,
@@ -97,6 +155,9 @@ def create_batch_input_jsonl(
     user_prompt,
     max_tokens,
     url="/v1/chat/completions",
+    structured_output_enabled=False,
+    pydantic_schema_path=None,
+    schema_class_name="MarineEngineeringManual",
 ):
     """
     Creates a .jsonl file from images in the input folder.
@@ -109,10 +170,15 @@ def create_batch_input_jsonl(
         user_prompt (str): User-level prompt for the model.
         max_tokens (int): Maximum number of tokens for the response.
         url (str, optional): API endpoint URL. Defaults to "/v1/chat/completions".
+        structured_output_enabled (bool, optional): Enable Structured Output if True.
+        pydantic_schema_path (str, optional): Path to the Python file containing the Pydantic schema.
+        schema_class_name (str, optional): Name of the schema class in the Pydantic file.
 
     Raises:
         Exception: If there is an error during file creation.
     """
+    logging.info("Creating batch input JSONL file...")
+
     try:
         with open(output_file, "w") as outfile:
             for filename in os.listdir(input_folder):
@@ -130,6 +196,9 @@ def create_batch_input_jsonl(
                         image_b64=image_b64,
                         max_tokens=max_tokens,
                         url=url,
+                        structured_output_enabled=structured_output_enabled,
+                        pydantic_schema_path=pydantic_schema_path,
+                        schema_class_name=schema_class_name,
                     )
                     outfile.write(json.dumps(request) + "\n")
         logging.info(f"Batch input file created: {output_file}")
@@ -289,31 +358,105 @@ def download_batch_results(result_file_id, output_file):
         raise
 
 
-def save_responses_as_markdown(result_file, output_folder):
+def save_responses_as_markdown(
+    result_file, input_folder, output_folder="./data/markdown"
+):
     """
-    Saves responses from the results file as Markdown files.
+    Saves responses from the results file as Markdown files in a subfolder based on the input folder name.
 
     Args:
         result_file (str): Path to the results file.
-        output_folder (str): Path to the folder where Markdown files will be saved.
+        input_folder (str): Path to the input folder containing the images.
+        output_folder (str): Base folder for saving Markdown files.
 
     Raises:
         Exception: If there is an error during file processing.
     """
     try:
-        os.makedirs(output_folder, exist_ok=True)
-        with open(result_file, "r") as infile:
+        # Create a subfolder in the output folder based on the basename of the input folder
+        subfolder_name = os.path.basename(os.path.normpath(input_folder))
+        markdown_folder = os.path.join(output_folder, subfolder_name)
+        os.makedirs(markdown_folder, exist_ok=True)
+
+        with open(result_file, "r", encoding="utf-8") as infile:
             for line in infile:
-                # Parse each response line
-                response = json.loads(line)
-                custom_id = response["custom_id"]
-                explanation = response["body"]["choices"][0]["message"]["content"]
-                output_md_path = os.path.join(output_folder, f"{custom_id}.md")
-                # Save the explanation as a Markdown file
-                with open(output_md_path, "w") as outfile:
-                    outfile.write(f"# Page Interpretation\n\n{explanation}")
-                logging.info(f"Saved Markdown file: {output_md_path}")
-                print(f"Saved Markdown: {output_md_path}")
+                try:
+                    # Parse each response line
+                    response = json.loads(line)
+                    custom_id = response.get("custom_id", "unknown_id")
+                    if response.get("response", {}).get("status_code") == 200:
+                        # Check if structured output is enabled
+                        message_content = response["response"]["body"]["choices"][0][
+                            "message"
+                        ]["content"]
+                        try:
+                            parsed_content = json.loads(message_content)
+                            # Structured output enabled
+                            image_relative_path = parsed_content.get(
+                                "image_relative_path", "N/A"
+                            )
+                            ocr_text = parsed_content.get("ocr_text", "N/A")
+                            ocr_explanation = parsed_content.get(
+                                "ocr_explanation", "N/A"
+                            )
+                            manual_title = parsed_content.get("manual_title", "N/A")
+                            chapter_name = parsed_content.get("chapter_name", "N/A")
+                            diagrams = parsed_content.get("diagrams", "N/A")
+                            schematics = parsed_content.get("schematics", "N/A")
+                            additional_notes = parsed_content.get(
+                                "additional_notes", "N/A"
+                            )
+
+                            # Construct the Markdown content
+                            markdown_content = f"""
+# {manual_title}
+
+**Image Relative Path:** {image_relative_path}
+
+## OCR Text
+{ocr_text}
+
+## Explanation
+{ocr_explanation}
+
+## Chapter Name
+{chapter_name}
+
+## Diagrams
+{diagrams}
+
+## Schematics
+{schematics}
+
+## Additional Notes
+{additional_notes}
+                            """
+                        except json.JSONDecodeError:
+                            # Structured output not enabled
+                            markdown_content = f"""
+# Response for {custom_id}
+
+## Assistant Response
+{message_content}
+                            """
+
+                        # Save the Markdown file
+                        output_md_path = os.path.join(
+                            markdown_folder, f"{custom_id}.md"
+                        )
+                        with open(output_md_path, "w", encoding="utf-8") as outfile:
+                            outfile.write(markdown_content.strip())
+                        logging.info(f"Saved Markdown file: {output_md_path}")
+                        print(f"Saved Markdown: {output_md_path}")
+                    else:
+                        logging.warning(
+                            f"Skipping response for custom_id '{custom_id}' due to non-200 status code."
+                        )
+                except Exception as parse_error:
+                    logging.error(
+                        f"Error parsing response line: {line}. Error: {parse_error}"
+                    )
+                    print(f"Error parsing a response. See logs for details.")
     except Exception as e:
         logging.error(f"Error saving responses as Markdown: {e}")
         raise
@@ -436,9 +579,9 @@ def get_openai_balance():
         url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
         headers = {
             "Authorization": f"Bearer {openai.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
+
         # Make the GET request
         response = requests.get(url, headers=headers)
         response.raise_for_status()
@@ -458,7 +601,7 @@ def get_openai_balance():
         return {
             "total_granted": total_granted,
             "total_used": total_used,
-            "total_available": total_available
+            "total_available": total_available,
         }
 
     except requests.exceptions.HTTPError as e:
@@ -488,6 +631,109 @@ def get_openai_balance():
         logging.error(f"Error retrieving API balance: {e}")
         print(f"An error occurred while retrieving the balance: {e}")
         return None
+
+
+def initialize_default_schema():
+    """
+    Ensures the schemas directory and default_schemas.py file exist. 
+    Prompts the user to overwrite or reset default_schemas.py if it already exists.
+
+    Returns:
+        str: Path to the default schema file.
+    """
+    schema_dir = "./schemas"
+    default_schema_file = os.path.join(schema_dir, "default_schemas.py")
+
+    # Create the directory if it doesn't exist
+    if not os.path.exists(schema_dir):
+        os.makedirs(schema_dir)
+        logging.info(f"Created schema directory: {schema_dir}")
+        print(f"Schema directory created at {schema_dir}.")
+    else:
+        logging.info(f"Schema directory already exists: {schema_dir}")
+
+    # Check if default schema file exists
+    if os.path.isfile(default_schema_file):
+        print(f"Default schema file already exists at {default_schema_file}.")
+        choice = input(
+            "Do you want to overwrite or reset the default_schemas.py file? (yes/no): "
+        ).strip().lower()
+
+        if choice not in {"yes", "y"}:
+            logging.info(f"Retained existing default schema file: {default_schema_file}")
+            print("Keeping the existing default schema file.")
+            return default_schema_file
+        else:
+            logging.info(f"User opted to reset the default schema file.")
+            print("Resetting the default schema file...")
+            status = "reset"
+    else:
+        logging.info(f"Default schema file does not exist. Creating it now...")
+        print(f"Creating the default schema file at {default_schema_file}.")
+        status = "created"
+
+    # Write the default schema content
+    with open(default_schema_file, "w") as f:
+        f.write(
+                """
+from pydantic import BaseModel, Field
+from typing import Optional, List
+
+class Schematic(BaseModel):
+    \"\"\"Schema for representing schematic or diagram metadata.\"\"\"
+    description: str = Field(..., description="Description of the schematic.")
+    annotations: Optional[List[str]] = Field(
+        None, description="Notes or labels associated with the schematic."
+    )
+    schematic_relative_path: Optional[str] = Field(
+        None, description="Relative path to the schematic file/image."
+    )
+    schematic_ocr_text: Optional[str] = Field(
+        None, description="OCR text extracted from the schematic, if any."
+    )
+
+    class Config:
+        json_schema_extra = {"additionalProperties": False}
+
+
+class MarineEngineeringManual(BaseModel):
+    \"\"\"Pydantic schema for structuring marine engineering manual data.\"\"\"
+    image_relative_path: str = Field(
+        ..., description="Relative path of the manual image."
+    )
+    ocr_text: str = Field(..., description="OCR output from the image.")
+    ocr_explanation: str = Field(..., description="Explanation of the OCR text.")
+    manual_title: Optional[str] = Field(
+        None, description="Title of the manual."
+    )
+    chapter_name: Optional[str] = Field(
+        None, description="Chapter name or section."
+    )
+    diagrams: Optional[List[str]] = Field(
+        None, description="Descriptions of diagrams in the manual."
+    )
+    schematics: Optional[List[Schematic]] = Field(
+        None, description="List of schematic metadata."
+    )
+    additional_notes: Optional[str] = Field(
+        None, description="Additional notes about the manual page."
+    )
+
+    class Config:
+        json_schema_extra = {"additionalProperties": False}
+
+"""
+            )
+    
+    # Log the appropriate action
+    if status == "created":
+        logging.info(f"Default schema file created: {default_schema_file}")
+        print(f"Default schema file successfully created at {default_schema_file}.")
+    elif status == "reset":
+        logging.info(f"Default schema file reset: {default_schema_file}")
+        print(f"Default schema file successfully reset at {default_schema_file}.")
+    
+    return default_schema_file
 
 
 def display_instruction_manual():
@@ -556,15 +802,30 @@ This tool provides an interactive menu to handle batch processing workflows with
 11. Change Model
     - Update the model being used for processing requests (e.g., `gpt-4`, `gpt-4-vision`).
 
-12. View Instruction Manual
+12. Enable/Disable Structured Output
+    - Toggle the Structured Output feature on or off.
+    - Structured Outputs enable the model to adhere to a specified JSON schema.
+
+13. Set Pydantic Schema Path
+    - Specify the path to the Python file containing the Pydantic schema.
+    - The schema ensures structured responses from the OpenAI API.
+
+14. Default Schema Initialization
+    - The tool initializes a default Pydantic schema (`MarineEngineeringManual`) in `schemas/default_schemas.py`.
+    - This schema is used for structuring manual page data (e.g., OCR text, schematics metadata).
+
+15. Check OpenAI API Balance
+    - Retrieves and displays the current OpenAI API balance or explains any restrictions.
+
+16. View Instruction Manual
     - Displays this guide.
 
-13. Cancel Batch
+17. Cancel Batch
     - Enter the Batch ID to cancel an ongoing batch.
     - Confirm before proceeding with cancellation.
     - It may take up to 10 minutes for the batch status to change to `cancelled`.
 
-14. List All Batches
+18. List All Batches
     - View batches with optional pagination:
       - Specify the number of batches to list (default: 10).
       - Use the cursor for pagination to fetch additional results.
@@ -575,18 +836,52 @@ This tool provides an interactive menu to handle batch processing workflows with
       - Metadata description (if available).
     - Option to copy the full Batch ID to your clipboard for further use.
 
-0. Terminate
-   - Exit the program gracefully.
-
 === Notes ===
-- Ensure your OpenAI API key is set in the environment variable `OPENAI_API_KEY`.
-- You can use `pyperclip` to copy Batch IDs or other information as needed.
-- If any errors occur, detailed logs are stored in `ocr_openai.log`.
+
+- **Structured Output Feature Documentation for Python:**
+  1. **Using Pydantic for Structured Outputs**:
+     - Define the schema as a Python class inheriting from `BaseModel`.
+     - Use descriptive fields with type annotations and `Field` metadata.
+     - Ensure compliance with OpenAI Structured Outputs requirements:
+       - `additionalProperties` must always be set to `false`.
+       - Objects may have up to 100 properties and 5 levels of nesting.
+       - Use enums judiciously, adhering to character limits.
+
+     Example Schema:
+     ```python
+     from pydantic import BaseModel, Field
+     from typing import Optional, List
+
+     class ExampleSchema(BaseModel):
+         field1: str = Field(..., description="Description for field1.")
+         field2: Optional[int] = Field(None, description="Optional integer field.")
+         items: List[str] = Field(..., description="List of strings.")
+
+         class Config:
+             schema_extra = {"additionalProperties": False}
+     ```
+
+  2. **Integration with OpenAI API**:
+     - Use the schema in the `construct_request_object()` function.
+     - Dynamically load the schema at runtime from the configured path.
+     - Toggle the feature on/off from the menu.
+
+  3. **Tweaking the Default Schema**:
+     - The default schema is located at `schemas/default_schemas.py`.
+     - Use the `MarineEngineeringManual` schema to structure manual data:
+       - OCR text and its explanation.
+       - Metadata about schematics and diagrams.
+
+  4. **Error Handling**:
+     - The tool validates the schema path and logs errors if the schema cannot be loaded or applied.
+
+- **Ensure your OpenAI API key is set in the environment variable `OPENAI_API_KEY`.
+- Detailed logs are stored in `ocr_openai.log`.
 
 ===============================
 """
     print(manual)
-    logging.info("Displayed the updated instruction manual.")
+    logging.info("Displayed the instruction manual.")
 
 
 # Main Menu
@@ -599,9 +894,13 @@ def main_menu():
     batch_input_file = "batch_input.jsonl"
     batch_output_file = "batch_output.jsonl"
     output_folder = "./data/markdown"
+    pydantic_schema_path = initialize_default_schema()  # Ensures default schema setup
+
+    structured_output_enabled = False  # Flag for enabling structured output
+    schema_class_name = "MarineEngineeringManual"
 
     # Default parameters
-    model = "gpt-4"
+    model = "gpt-4o-mini"
     system_prompt = "You are a helpful assistant that explains instruction manuals."
     user_prompt = "Please interpret this image."
     url = "/v1/chat/completions"
@@ -645,8 +944,14 @@ ___  ___              _         _____        _____ ______  _____
         print("13. Cancel Batch")
         print("14. List All Batches")
         print("15. Check OpenAI API Balance")
+        print(
+            f"16. Enable/Disable Structured Output (current: {'Enabled' if structured_output_enabled else 'Disabled'})"
+        )
+        print(
+            f"17. Set Pydantic Schema Path (current: {pydantic_schema_path or 'Not Set'})"
+        )
 
-        choice = input("\nEnter your choice: \t ")
+        choice = input("\nEnter your choice: \t ").strip()
 
         try:
             if choice == "1":
@@ -696,6 +1001,8 @@ ___  ___              _         _____        _____ ______  _____
                     user_prompt,
                     max_tokens,
                     url,
+                    structured_output_enabled,
+                    pydantic_schema_path,
                 )
             elif choice == "4":
                 # Use existing batch input file
@@ -739,7 +1046,9 @@ ___  ___              _         _____        _____ ______  _____
                 download_batch_results(result_file_id, batch_output_file)
             elif choice == "9":
                 # Save responses as Markdown
-                save_responses_as_markdown(batch_output_file, output_folder)
+                save_responses_as_markdown(
+                    batch_output_file, input_folder, output_folder
+                )
             elif choice == "10":
                 # Change API URL
                 url = input(
@@ -780,6 +1089,24 @@ ___  ___              _         _____        _____ ______  _____
             elif choice == "0":
                 print("\nExiting the program...\n\nBye.")
                 break
+            elif choice == "16":
+                # Toggle Structured Output
+                structured_output_enabled = not structured_output_enabled
+                state = "enabled" if structured_output_enabled else "disabled"
+                logging.info(f"Structured Output feature has been {state}.")
+                print(f"Structured Output is now {state}.")
+            elif choice == "17":
+                # Set Pydantic Schema Path
+                new_path = input("Enter the path to the Pydantic schema file: ").strip()
+                if os.path.isfile(new_path):
+                    pydantic_schema_path = new_path
+                    logging.info(
+                        f"Pydantic schema path updated to: {pydantic_schema_path}"
+                    )
+                    print(f"Schema path set to: {pydantic_schema_path}")
+                else:
+                    logging.warning(f"Invalid schema path provided: {new_path}")
+                    print(f"Error: The file {new_path} does not exist.")
             else:
                 print("Invalid choice. Please try again.")
         except Exception as e:

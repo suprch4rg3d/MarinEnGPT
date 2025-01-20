@@ -1,5 +1,7 @@
 data
 storage
+batch_input.jsonl
+batch_output.jsonl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
