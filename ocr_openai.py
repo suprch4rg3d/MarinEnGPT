@@ -93,7 +93,7 @@ def construct_request_object(
                     ],
                 },
             ],
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
         },
     }
 
@@ -234,7 +234,11 @@ def upload_batch_file(batch_input_file):
         raise
 
 
-def create_batch_request(file_id, completion_window="24h", metadata=None):
+def create_batch_request(
+    file_id,
+    completion_window="24h",
+    metadata=None,
+):
     """
     Creates a batch processing request.
 
@@ -250,7 +254,9 @@ def create_batch_request(file_id, completion_window="24h", metadata=None):
         Exception: If there is an error during batch creation.
     """
     if metadata is None:
-        metadata = {"description": "Default batch job"}
+        metadata = {
+            "description": "Default batch job for preprocessing of marine engineering manual pages as images"
+        }
 
     try:
         response = openai.batches.create(
@@ -358,25 +364,106 @@ def download_batch_results(result_file_id, output_file):
         raise
 
 
-def save_responses_as_markdown(
-    result_file, input_folder, output_folder="./data/markdown"
+def load_schema_fields(
+    pydantic_schema_path,
+    schema_class_name,
 ):
     """
-    Saves responses from the results file as Markdown files in a subfolder based on the input folder name.
+    Loads schema fields dynamically from a specified Pydantic schema file.
+
+    Args:
+        pydantic_schema_path (str): Path to the Python file containing the Pydantic schema.
+        schema_class_name (str): Name of the schema class in the Pydantic file.
+
+    Returns:
+        list: A list of schema field names if successful, otherwise an empty list.
+    """
+    if not pydantic_schema_path or not os.path.isfile(pydantic_schema_path):
+        logging.warning(f"[WARNING] Pydantic schema file not found at {pydantic_schema_path}")
+        print(f"[DEBUG] Schema file not found: {pydantic_schema_path}")
+        return []
+
+    try:
+        print(f"[DEBUG] Loading schema from: {pydantic_schema_path}")
+        logging.info(f"[INFO] Loading schema from {pydantic_schema_path}")
+
+        # Load the schema dynamically
+        spec = importlib.util.spec_from_file_location("schema", pydantic_schema_path)
+        schema_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(schema_module)
+
+        logging.info("[INFO] Schema module loaded successfully.")
+        print(f"[DEBUG] Schema module loaded successfully.")
+
+        # Retrieve the schema class
+        schema_class = getattr(schema_module, schema_class_name, None)
+        if not schema_class:
+            logging.error(
+                f"Schema class '{schema_class_name}' not found in {pydantic_schema_path}"
+            )
+            print(f"[DEBUG] Schema class not found: {schema_class_name}")
+            return []
+
+        logging.info(f"[INFO] Found schema class: {schema_class_name}")
+        print(f"[DEBUG] Found schema class: {schema_class_name}")
+
+        # Extract field names from Pydantic model
+        schema_fields = (
+            list(schema_class.model_fields.keys())
+            if hasattr(schema_class, "model_fields")
+            else []
+        )
+        
+        logging.debug(f"[DEBUG] Extracted schema fields: {schema_fields}")
+        print(f"[DEBUG] Extracted fields: {schema_fields}")
+
+        if not schema_fields:
+            logging.warning(f"[WARNING] No fields found in schema class {schema_class_name}")
+            print(f"[DEBUG] No fields found in schema class {schema_class_name}")
+
+        return schema_fields
+
+    except Exception as e:
+        logging.error(f"[ERROR] Error loading schema from {pydantic_schema_path}: {e}")
+        print(f"[DEBUG] Error loading schema: {e}")
+        return []
+
+
+def save_responses_as_markdown(
+    result_file,
+    input_folder,
+    output_folder="./data/markdown",
+    pydantic_schema_path=None,
+    schema_class_name="MarineEngineeringManual",
+):
+    """
+    Saves responses from the results file as Markdown files in a subfolder based on the base name of the input folder.
+    Dynamically adapts to the schema fields provided.
 
     Args:
         result_file (str): Path to the results file.
         input_folder (str): Path to the input folder containing the images.
         output_folder (str): Base folder for saving Markdown files.
+        pydantic_schema_path (str, optional): Path to the Pydantic schema file. Defaults to None.
+        schema_class_name (str, optional): Name of the schema class in the Pydantic file. Defaults to "MarineEngineeringManual".
 
     Raises:
         Exception: If there is an error during file processing.
     """
     try:
-        # Create a subfolder in the output folder based on the basename of the input folder
-        subfolder_name = os.path.basename(os.path.normpath(input_folder))
-        markdown_folder = os.path.join(output_folder, subfolder_name)
-        os.makedirs(markdown_folder, exist_ok=True)
+        # Create a subfolder in the output folder based on the base name of the input folder
+        base_name = os.path.basename(os.path.normpath(input_folder))
+        markdown_folder = os.path.join(output_folder, base_name)
+        os.makedirs(markdown_folder, exist_ok=True)  # Ensure the folder exists
+
+        print(f"[DEBUG] Using schema path: {pydantic_schema_path}")
+        print(f"[DEBUG] Using schema class: {schema_class_name}")
+
+        # Load schema fields dynamically
+        schema_fields = load_schema_fields(pydantic_schema_path, schema_class_name)
+
+        # Debugging: Print schema fields
+        print(f"[DEBUG] Schema Fields: {schema_fields}")
 
         with open(result_file, "r", encoding="utf-8") as infile:
             for line in infile:
@@ -384,53 +471,26 @@ def save_responses_as_markdown(
                     # Parse each response line
                     response = json.loads(line)
                     custom_id = response.get("custom_id", "unknown_id")
+
                     if response.get("response", {}).get("status_code") == 200:
                         # Check if structured output is enabled
                         message_content = response["response"]["body"]["choices"][0][
                             "message"
                         ]["content"]
+
                         try:
                             parsed_content = json.loads(message_content)
                             # Structured output enabled
-                            image_relative_path = parsed_content.get(
-                                "image_relative_path", "N/A"
-                            )
-                            ocr_text = parsed_content.get("ocr_text", "N/A")
-                            ocr_explanation = parsed_content.get(
-                                "ocr_explanation", "N/A"
-                            )
-                            manual_title = parsed_content.get("manual_title", "N/A")
-                            chapter_name = parsed_content.get("chapter_name", "N/A")
-                            diagrams = parsed_content.get("diagrams", "N/A")
-                            schematics = parsed_content.get("schematics", "N/A")
-                            additional_notes = parsed_content.get(
-                                "additional_notes", "N/A"
-                            )
+                            markdown_content = f"# Response for {custom_id}\n\n"
 
-                            # Construct the Markdown content
-                            markdown_content = f"""
-# {manual_title}
+                            # Only generate markdown if schema fields were extracted successfully
+                            if schema_fields:
+                                for field in schema_fields:
+                                    value = parsed_content.get(field, "N/A")
+                                    markdown_content += f"## {field.replace('_', ' ').title()}\n{value}\n\n"
+                            else:
+                                markdown_content += "## No structured output detected. Check your schema settings.\n"
 
-**Image Relative Path:** {image_relative_path}
-
-## OCR Text
-{ocr_text}
-
-## Explanation
-{ocr_explanation}
-
-## Chapter Name
-{chapter_name}
-
-## Diagrams
-{diagrams}
-
-## Schematics
-{schematics}
-
-## Additional Notes
-{additional_notes}
-                            """
                         except json.JSONDecodeError:
                             # Structured output not enabled
                             markdown_content = f"""
@@ -446,6 +506,7 @@ def save_responses_as_markdown(
                         )
                         with open(output_md_path, "w", encoding="utf-8") as outfile:
                             outfile.write(markdown_content.strip())
+
                         logging.info(f"Saved Markdown file: {output_md_path}")
                         print(f"Saved Markdown: {output_md_path}")
                     else:
@@ -635,7 +696,7 @@ def get_openai_balance():
 
 def initialize_default_schema():
     """
-    Ensures the schemas directory and default_schemas.py file exist. 
+    Ensures the schemas directory and default_schemas.py file exist.
     Prompts the user to overwrite or reset default_schemas.py if it already exists.
 
     Returns:
@@ -655,12 +716,18 @@ def initialize_default_schema():
     # Check if default schema file exists
     if os.path.isfile(default_schema_file):
         print(f"Default schema file already exists at {default_schema_file}.")
-        choice = input(
-            "Do you want to overwrite or reset the default_schemas.py file? (yes/no): "
-        ).strip().lower()
+        choice = (
+            input(
+                "Do you want to reset the default_schemas.py file? Any custom changes made to it will be lost (yes/no): "
+            )
+            .strip()
+            .lower()
+        )
 
         if choice not in {"yes", "y"}:
-            logging.info(f"Retained existing default schema file: {default_schema_file}")
+            logging.info(
+                f"Retained existing default schema file: {default_schema_file}"
+            )
             print("Keeping the existing default schema file.")
             return default_schema_file
         else:
@@ -675,7 +742,7 @@ def initialize_default_schema():
     # Write the default schema content
     with open(default_schema_file, "w") as f:
         f.write(
-                """
+            """
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
@@ -723,8 +790,8 @@ class MarineEngineeringManual(BaseModel):
         json_schema_extra = {"additionalProperties": False}
 
 """
-            )
-    
+        )
+
     # Log the appropriate action
     if status == "created":
         logging.info(f"Default schema file created: {default_schema_file}")
@@ -732,7 +799,7 @@ class MarineEngineeringManual(BaseModel):
     elif status == "reset":
         logging.info(f"Default schema file reset: {default_schema_file}")
         print(f"Default schema file successfully reset at {default_schema_file}.")
-    
+
     return default_schema_file
 
 
@@ -1047,7 +1114,11 @@ ___  ___              _         _____        _____ ______  _____
             elif choice == "9":
                 # Save responses as Markdown
                 save_responses_as_markdown(
-                    batch_output_file, input_folder, output_folder
+                    batch_output_file,
+                    input_folder,
+                    output_folder,
+                    pydantic_schema_path,
+                    schema_class_name,
                 )
             elif choice == "10":
                 # Change API URL
