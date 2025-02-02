@@ -379,7 +379,9 @@ def load_schema_fields(
         list: A list of schema field names if successful, otherwise an empty list.
     """
     if not pydantic_schema_path or not os.path.isfile(pydantic_schema_path):
-        logging.warning(f"[WARNING] Pydantic schema file not found at {pydantic_schema_path}")
+        logging.warning(
+            f"[WARNING] Pydantic schema file not found at {pydantic_schema_path}"
+        )
         print(f"[DEBUG] Schema file not found: {pydantic_schema_path}")
         return []
 
@@ -413,12 +415,14 @@ def load_schema_fields(
             if hasattr(schema_class, "model_fields")
             else []
         )
-        
+
         logging.debug(f"[DEBUG] Extracted schema fields: {schema_fields}")
         print(f"[DEBUG] Extracted fields: {schema_fields}")
 
         if not schema_fields:
-            logging.warning(f"[WARNING] No fields found in schema class {schema_class_name}")
+            logging.warning(
+                f"[WARNING] No fields found in schema class {schema_class_name}"
+            )
             print(f"[DEBUG] No fields found in schema class {schema_class_name}")
 
         return schema_fields
@@ -473,32 +477,63 @@ def save_responses_as_markdown(
                     custom_id = response.get("custom_id", "unknown_id")
 
                     if response.get("response", {}).get("status_code") == 200:
-                        # Check if structured output is enabled
-                        message_content = response["response"]["body"]["choices"][0][
-                            "message"
-                        ]["content"]
+                        # Extract message content
+                        choices = response["response"]["body"].get("choices", [])
+                        if not choices:
+                            logging.warning(
+                                f"No choices found in response for {custom_id}"
+                            )
+                            continue
 
+                        message = choices[0].get("message", {})
+                        finish_reason = choices[0].get("finish_reason", "")
+                        refusal = message.get("refusal", None)
+                        message_content = message.get("content", "")
+
+                        markdown_content = f"# Response for {custom_id}\n\n"
+
+                        # Handle refusals (i.e."refusal": "I'm sorry, I cannot assist with that request.")
+                        if refusal:
+                            logging.warning(
+                                f"Skipping Markdown generation for {custom_id} due to model refusal: {refusal}"
+                            )
+                            continue  # Skip this response entirely
+
+                        # Handle truncated responses
+                        elif finish_reason == "length":
+                            logging.warning(
+                                f"Truncated response detected for {custom_id}. Consider increasing max_tokens."
+                            )
+                            markdown_content += "## WARNING: Response was truncated.\nSome structured data may be missing due to max token limits.\n\n"
+
+                        # Attempt to parse structured output
                         try:
                             parsed_content = json.loads(message_content)
-                            # Structured output enabled
-                            markdown_content = f"# Response for {custom_id}\n\n"
 
-                            # Only generate markdown if schema fields were extracted successfully
+                            # Generate Markdown from structured fields
                             if schema_fields:
                                 for field in schema_fields:
                                     value = parsed_content.get(field, "N/A")
                                     markdown_content += f"## {field.replace('_', ' ').title()}\n{value}\n\n"
+                                    
+                                    if isinstance(value, list):
+                                        for item in value:
+                                            markdown_content += f"- {item}\n"
+                                    else:
+                                        markdown_content += f"{value}\n\n"
                             else:
+                                logging.warning(
+                                    f"No structured output detected for {custom_id}. Check your schema settings."
+                                )
                                 markdown_content += "## No structured output detected. Check your schema settings.\n"
 
                         except json.JSONDecodeError:
-                            # Structured output not enabled
-                            markdown_content = f"""
-# Response for {custom_id}
-
-## Assistant Response
-{message_content}
-                            """
+                            logging.error(
+                                f"JSON parsing failed for {custom_id}. Fallback to raw text."
+                            )
+                            markdown_content += (
+                                f"## Assistant Response\n{message_content}\n"
+                            )
 
                         # Save the Markdown file
                         output_md_path = os.path.join(
