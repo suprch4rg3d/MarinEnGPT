@@ -8,6 +8,74 @@ import pyperclip
 import requests
 from helpers import *
 import importlib.util
+from dotenv import load_dotenv
+from pydantic import BaseModel
+import inspect
+import collections
+
+# Persistence Configuration
+PERSISTENCE_FILE = "ocr_openai_persistence.json"
+
+
+def load_config():
+    """
+    Loads the configuration file and returns stored values.
+    If the file does not exist or is corrupted, it returns default values.
+
+    Returns:
+        dict: Dictionary containing stored values.
+    """
+    default_config = {
+        "input_folder": "./data/images",
+        "batch_input_file": "batch_input.jsonl",
+        "batch_output_file": "batch_output.jsonl",
+        "output_folder": "./data/markdown",
+        "model": "gpt-4o-mini",
+        "system_prompt": "You are a helpful assistant that explains instruction manuals.",
+        "user_prompt": "Please interpret this image.",
+        "url": "/v1/chat/completions",
+        "max_tokens": 512,
+        "structured_output_enabled": False,
+        "schema_class_name": "MarineEngineeringManual",
+        "pydantic_schema_path": "./schemas/default_schemas.py",
+    }
+
+    if not os.path.exists(PERSISTENCE_FILE):
+        return default_config  # Return defaults if config file doesn't exist
+
+    try:
+        with open(PERSISTENCE_FILE, "r", encoding="utf-8") as file:
+            saved_config = json.load(file)
+
+        # Ensure all required keys are present
+        for key in default_config:
+            if key not in saved_config:
+                saved_config[key] = default_config[key]
+
+        # Initialize the schema file, ensuring it exists or can be reset
+        saved_config["pydantic_schema_path"] = initialize_default_schema(
+            saved_config["pydantic_schema_path"],
+        )
+
+        return saved_config  # Load config from JSON file
+    except (json.JSONDecodeError, IOError):
+        return default_config  # If corrupted, return defaults
+
+
+def save_config(config):
+    """
+    Saves the updated configuration to a JSON file.
+
+    Args:
+        config (dict): Dictionary containing updated paths.
+    """
+    try:
+        with open(PERSISTENCE_FILE, "w", encoding="utf-8") as file:
+            json.dump(config, file, indent=4)
+        print("\nConfiguration saved successfully.")
+    except IOError as e:
+        print(f"\nError saving configuration: {e}")
+
 
 # Logging Configuration
 logging.basicConfig(
@@ -16,6 +84,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     encoding="utf-8",
 )
+
+# Load .env file if it exists
+load_dotenv()
 
 # Set your OpenAI API key
 openai.api_key = os.environ.get("OPENAI_API_KEY")
@@ -515,7 +586,7 @@ def save_responses_as_markdown(
                                 for field in schema_fields:
                                     value = parsed_content.get(field, "N/A")
                                     markdown_content += f"## {field.replace('_', ' ').title()}\n{value}\n\n"
-                                    
+
                                     if isinstance(value, list):
                                         for item in value:
                                             markdown_content += f"- {item}\n"
@@ -569,7 +640,7 @@ def cancel_batch(batch_id):
         Exception: If there is an error during cancellation.
     """
     confirm = (
-        input(f"Are you sure you want to cancel Batch ID {batch_id}? (yes/no): ")
+        input(f"Are you sure you want to cancel Batch ID {batch_id}? (yes/no): \t")
         .strip()
         .lower()
     )
@@ -587,12 +658,13 @@ def cancel_batch(batch_id):
         print("Cancellation aborted.")
 
 
-def list_batches(limit=10, after=None):
+def list_batches(url, limit=10, after=None):
     """
-    Lists batches with optional pagination and allows copying the full batch ID.
+    Lists only the batches belonging to the same API as the user-defined `url` parameter with optional pagination and allows copying the full batch ID.
 
     Args:
-        limit (int): Number of batches to list per page (default is 10).
+        url (str): The current OpenAI API endpoint (e.g., "/v1/chat/completions").
+        limit (int): Number of batches to list per page (default: 10).
         after (str, optional): Cursor for pagination to fetch results after a specific batch.
 
     Returns:
@@ -603,21 +675,28 @@ def list_batches(limit=10, after=None):
         if after:
             params["after"] = after
 
-        # Retrieve batches with pagination
+        # Retrieve batches from OpenAI API with pagination
         response = openai.batches.list(**params)
+        
+        # Extract only relevant batches
+        batches = [batch for batch in response if batch.endpoint == url]
+
+        if not batches:
+            print(f"\nNo batches found for {url}.\n")
+            return
 
         # Store batch IDs for clipboard functionality
         batch_ids = {}
 
         # Display header
-        print("\n=== Batches ===")
+        print(f"\n=== Batches for \033[96m{url}\033[0m ===")
         print(
             f"{'Index':<6} {'Batch ID (truncated)':<20} {'Status':<15} {'Created At':<20} {'Metadata':<30}"
         )
         print("-" * 100)
 
-        # Display only the limited number of batches
-        for i, batch in enumerate(response, start=1):
+        # Display filtered batch data
+        for i, batch in enumerate(batches, start=1):
             truncated_id = batch.id[:8] + "..." + batch.id[-8:]  # Truncate the ID
             metadata_desc = (
                 batch.metadata.get("description", "N/A") if batch.metadata else "N/A"
@@ -645,7 +724,7 @@ def list_batches(limit=10, after=None):
 
         # Allow user to copy a batch ID
         choice = input(
-            "Enter the index of the batch to copy its full ID (or press Enter to skip): "
+            "Enter the index of the batch to copy its full ID (or press Enter to skip): \t"
         ).strip()
         if choice.isdigit():
             index = int(choice)
@@ -729,53 +808,52 @@ def get_openai_balance():
         return None
 
 
-def initialize_default_schema():
+def initialize_default_schema(persisted_path=None):
     """
     Ensures the schemas directory and default_schemas.py file exist.
-    Prompts the user to overwrite or reset default_schemas.py if it already exists.
+    If persisted_path exists, it is returned. Otherwise, the default path is used.
+
+    Args:
+        persisted_path (str): Path from the persistence file, if available.
 
     Returns:
-        str: Path to the default schema file.
+        str: The final schema file path.
     """
     schema_dir = "./schemas"
     default_schema_file = os.path.join(schema_dir, "default_schemas.py")
+
+    # If a persisted schema path exists, return it
+    if persisted_path and os.path.isfile(persisted_path):
+        return persisted_path
 
     # Create the directory if it doesn't exist
     if not os.path.exists(schema_dir):
         os.makedirs(schema_dir)
         logging.info(f"Created schema directory: {schema_dir}")
         print(f"Schema directory created at {schema_dir}.")
-    else:
-        logging.info(f"Schema directory already exists: {schema_dir}")
 
-    # Check if default schema file exists
+    # Check if the schema file exists and prompt the user for reset
     if os.path.isfile(default_schema_file):
-        print(f"Default schema file already exists at {default_schema_file}.")
+        print(f"\nDefault schema file already exists at {default_schema_file}.")
         choice = (
             input(
-                "Do you want to reset the default_schemas.py file? Any custom changes made to it will be lost (yes/no): "
+                "Do you want to reset the default_schemas.py file? "
+                "Any custom changes will be lost (yes/no): \t"
             )
             .strip()
             .lower()
         )
 
         if choice not in {"yes", "y"}:
-            logging.info(
-                f"Retained existing default schema file: {default_schema_file}"
-            )
-            print("Keeping the existing default schema file.")
-            return default_schema_file
-        else:
-            logging.info(f"User opted to reset the default schema file.")
-            print("Resetting the default schema file...")
-            status = "reset"
-    else:
-        logging.info(f"Default schema file does not exist. Creating it now...")
-        print(f"Creating the default schema file at {default_schema_file}.")
-        status = "created"
+            logging.info(f"Retained existing schema file: {default_schema_file}")
+            return default_schema_file  # Keep the existing file
 
-    # Write the default schema content
-    with open(default_schema_file, "w") as f:
+        action = "reset"
+    else:
+        action = "created"
+
+    # Write the default schema file (either creating or resetting)
+    with open(default_schema_file, "w", encoding="utf-8") as f:
         f.write(
             """
 from pydantic import BaseModel, Field
@@ -828,14 +906,88 @@ class MarineEngineeringManual(BaseModel):
         )
 
     # Log the appropriate action
-    if status == "created":
+    if action == "created":
         logging.info(f"Default schema file created: {default_schema_file}")
         print(f"Default schema file successfully created at {default_schema_file}.")
-    elif status == "reset":
+    elif action == "reset":
         logging.info(f"Default schema file reset: {default_schema_file}")
         print(f"Default schema file successfully reset at {default_schema_file}.")
 
     return default_schema_file
+
+
+def list_pydantic_classes(pydantic_schema_path):
+    """
+    Lists all Pydantic classes from a given schema file.
+
+    Args:
+        pydantic_schema_path (str): Path to the Python file containing the Pydantic schema.
+
+    Returns:
+        list: A list of Pydantic class names if found, otherwise an empty list.
+    """
+    if not pydantic_schema_path or not os.path.isfile(pydantic_schema_path):
+        logging.warning(f"Pydantic schema file not found: {pydantic_schema_path}")
+        print(f"Error: Schema file '{pydantic_schema_path}' not found.")
+        return []
+
+    try:
+        # Dynamically load the schema module
+        spec = importlib.util.spec_from_file_location(
+            "schema_module", pydantic_schema_path
+        )
+        schema_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(schema_module)
+
+        # Retrieve all classes from the module that inherit from BaseModel
+        pydantic_classes = [
+            name
+            for name, obj in inspect.getmembers(schema_module, inspect.isclass)
+            if issubclass(obj, BaseModel) and obj.__module__ == schema_module.__name__
+        ]
+
+        if not pydantic_classes:
+            logging.warning(f"No Pydantic classes found in: {pydantic_schema_path}")
+            print(f"No Pydantic classes found in the schema file.")
+
+        return pydantic_classes
+
+    except Exception as e:
+        logging.error(
+            f"Error loading Pydantic classes from {pydantic_schema_path}: {e}"
+        )
+        print(f"Error: Could not load schema classes due to {e}")
+        return []
+
+
+def view_log_file(log_file="ocr_openai.log"):
+    """
+    Allows the user to view the last N lines of the log file.
+
+    Args:
+        log_file (str): Path to the log file (default: "ocr_openai.log").
+    """
+    if not os.path.exists(log_file):
+        print(f"Log file '{log_file}' does not exist.")
+        return
+
+    try:
+        # Ask user for the number of lines to display
+        num_lines_input = input(
+            "\nEnter the number of log lines to display (press Enter for last 10): \t"
+        ).strip()
+        num_lines = int(num_lines_input) if num_lines_input.isdigit() else 10
+
+        with open(log_file, "r", encoding="utf-8") as file:
+            # Efficiently read last `num_lines` using deque
+            last_lines = collections.deque(file, num_lines)
+
+        print("\n=== Log Output ===\n")
+        for line in last_lines:
+            print(line.strip())
+
+    except Exception as e:
+        print(f"An error occurred while reading the log file: {e}")
 
 
 def display_instruction_manual():
@@ -986,114 +1138,326 @@ This tool provides an interactive menu to handle batch processing workflows with
     logging.info("Displayed the instruction manual.")
 
 
+def clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+
 # Main Menu
 def main_menu():
     """
     Main menu to interact with the batch processing workflow.
     """
     # Default paths and parameters
-    input_folder = "./data/images"
-    batch_input_file = "batch_input.jsonl"
-    batch_output_file = "batch_output.jsonl"
-    output_folder = "./data/markdown"
-    pydantic_schema_path = initialize_default_schema()  # Ensures default schema setup
+    config = load_config()  # Load persisted config
 
-    structured_output_enabled = False  # Flag for enabling structured output
-    schema_class_name = "MarineEngineeringManual"
+    input_folder = config["input_folder"]
+    batch_input_file = config["batch_input_file"]
+    batch_output_file = config["batch_output_file"]
+    output_folder = config["output_folder"]
+    pydantic_schema_path = config[
+        "pydantic_schema_path"
+    ]  # Ensures default schema setup
+
+    structured_output_enabled = config[
+        "structured_output_enabled"
+    ]  # Flag for enabling structured output
+    schema_class_name = config["schema_class_name"]
 
     # Default parameters
-    model = "gpt-4o-mini"
-    system_prompt = "You are a helpful assistant that explains instruction manuals."
-    user_prompt = "Please interpret this image."
-    url = "/v1/chat/completions"
-    max_tokens = 512  # Default max_tokens value
+    model = config["model"]
+    system_prompt = config["system_prompt"]
+    user_prompt = config["user_prompt"]
+    url = config["url"]
+    max_tokens = config["max_tokens"]  # Default max_tokens value
 
     while True:
+        clear_screen()  # Clears terminal screen before showing the menu
         # Display the menu options
+        GREEN_BOLD = "\033[1;32m"
+        RESET = "\033[0m"
         print(
-            r"""
-___  ___              _         _____        _____ ______  _____                                    
-|  \/  |             (_)       |  ___|      |  __ \| ___ \|_   _|                                   
-| .  . |  __ _  _ __  _  _ __  | |__  _ __  | |  \/| |_/ /  | |                                     
-| |\/| | / _` || '__|| || '_ \ |  __|| '_ \ | | __ |  __/   | |                                     
-| |  | || (_| || |   | || | | || |___| | | || |_\ \| |      | |                                     
-\______/ \__,_||_|   |_||_| |__________| |____________ _______/     ______         _         _      
-|  _  |                     / _ \|_   _| |  _  |/  __ \| ___ \  _   | ___ \       | |       | |     
-| | | | _ __    ___  _ __  / /_\ \ | |   | | | || /  \/| |_/ /_| |_ | |_/ /  __ _ | |_  ___ | |__   
-| | | || '_ \  / _ \| '_ \ |  _  | | |   | | | || |    |    /|_   _|| ___ \ / _` || __|/ __|| '_ \  
-\ \_/ /| |_) ||  __/| | | || | | |_| |_  \ \_/ /| \__/\| |\ \  |_|  | |_/ /| (_| || |_| (__ | | | | 
- \___/ | .__/  \___||_| |_|\_| |_/\___/   \___/  \____/\_| \_|      \____/  \__,_| \__|\___||_| |_| 
-       | |                                                                                          
-       |_|                                                                                                  
+            rf"""
+······················································································
+:  ___                      _    ___    ___   ____ ____    ____        _       _     :
+: / _ \ _ __   ___ _ __    / \  |_ _|  / _ \ / ___|  _ \  | __ )  __ _| |_ ___| |__  :
+:| | | | '_ \ / _ \ '_ \  / _ \  | |  | | | | |   | |_) | |  _ \ / _` | __/ __| '_ \ :
+:| |_| | |_) |  __/ | | |/ ___ \ | |  | |_| | |___|  _ <  | |_) | (_| | || (__| | | |:
+: \___/| .__/ \___|_| |_/_/   \_\___|  \___/ \____|_| \_\ |____/ \__,_|\__\___|_| |_|:
+:      |_|      |  _ \ _ __ ___   ___ ___  ___ ___(_)_ __   __ _                     :
+:               | |_) | '__/ _ \ / __/ _ \/ __/ __| | '_ \ / _` |                    :
+:               |  __/| | | (_) | (_|  __/\__ \__ \ | | | | (_| |                    :
+:               |_|   |_|  \___/ \___\___||___/___/_|_| |_|\__, |                    :
+:                                                          |___/                     :
+        ---------------  Based on OpenAI API {GREEN_BOLD}v1.58.1{RESET}  ---------------------            
+                        
             """
         )
         print(
-            "\n Note: By default, the latest models are limited to 4,096 output tokens independent of the context window size!\n"
-        )
-        print("0. Terminate")
-        print("1. Configure Paths")
-        print(f"2. Set max_tokens (current: {max_tokens})")
-        print("3. Create Batch Input File (.jsonl)")
-        print("4. Use Existing Batch Input File (.jsonl)")
-        print("5. Upload Batch Input File")
-        print("6. Create and Submit Batch Request")
-        print("7. Monitor Batch Processing")
-        print("8. Download Batch Results")
-        print("9. Save Responses as Markdown")
-        print(f"10. Change API URL (current: {url})")
-        print(f"11. Change Model (current: {model})")
-        print("12. View Instruction Manual")
-        print("13. Cancel Batch")
-        print("14. List All Batches")
-        print("15. Check OpenAI API Balance")
-        print(
-            f"16. Enable/Disable Structured Output (current: {'Enabled' if structured_output_enabled else 'Disabled'})"
-        )
-        print(
-            f"17. Set Pydantic Schema Path (current: {pydantic_schema_path or 'Not Set'})"
+            "\033[38;2;255;165;0m\033[1mNote:\033[0m \033[1m\033[4mBy default, the latest models are limited to 4,096 output tokens independent of the context window size!\033[0m"
         )
 
-        choice = input("\nEnter your choice: \t ").strip()
+        # **General & Batch Management**
+        print("\n\033[1mGeneral & Batch Management\033[0m")
+        print("\t0. Terminate")
+        print("\t1. View Instruction Manual")
+        print("\t2. Check OpenAI API Balance")
+        print("\t3. List All Batches")
+        print("\t4. Cancel Batch")
+        print("\t5. View Logs")
 
+        # **Configurations**
+        print("\n\033[1mConfigurations\033[0m")
+        print("\t6. Configure Paths")
+        print(
+            f"\t   - Input Folder: [\033[93mCurrent:\033[0m \033[1;96m{input_folder}\033[0m]"
+        )
+        print(
+            f"\t   - Batch Input File: [\033[93mCurrent:\033[0m \033[1;96m{batch_input_file}\033[0m]"
+        )
+        print(
+            f"\t   - Batch Output File: [\033[93mCurrent:\033[0m \033[1;96m{batch_output_file}\033[0m]"
+        )
+        print(
+            f"\t   - Output Folder: [\033[93mCurrent:\033[0m \033[1;96m{output_folder}\033[0m]"
+        )
+        print(f"\t7. Change Model (\033[93mCurrent:\033[0m \033[96m{model}\033[0m)")
+        print(
+            f"\t8. Set Max Tokens (\033[93mCurrent:\033[0m \033[96m{max_tokens}\033[0m)"
+        )
+        print(f"\t9. Change API URL (\033[93mCurrent:\033[0m \033[96m{url}\033[0m)")
+        print("\t10. Change & View System/User Prompts")
+        print(
+            f"\t11. Enable/Disable Structured Output (\033[93mCurrent:\033[0m \033[96m{'Enabled' if structured_output_enabled else 'Disabled'}\033[0m)"
+        )
+        print(
+            f"\t12. Set Pydantic Schema Path (\033[93mCurrent:\033[0m \033[96m{pydantic_schema_path or 'Not Set'}\033[0m)"
+        )
+        print(
+            f"\t13. Change Schema Class Name (\033[93mCurrent:\033[0m \033[96m{schema_class_name}\033[0m)"
+        )
+
+        # **Batch Processing Workflow**
+        print("\n\033[1mBatch Processing Workflow\033[0m")
+        print("\t14. Create Batch Input File (.jsonl)")
+        print("\t15. Use Existing Batch Input File (.jsonl)")
+        print("\t16. Upload Batch Input File")
+        print("\t17. Create and Submit Batch Request")
+        print("\t18. Monitor Batch Processing")
+        print("\t19. Download Batch Results")
+        print("\t20. Save Responses as Markdown")
+
+        choice = input("\n\tEnter your choice: \t ").strip()
+        clear_screen()
         try:
-            if choice == "1":
+            # **General & Batch Management**
+            if choice == "0":
+                print("\nExiting the program...\n\nBye.")
+                time.sleep(2)
+                clear_screen()
+                break
+            elif choice == "1":
+                # View instruction manual
+                display_instruction_manual()
+            elif choice == "2":
+                # Check OpenAI API Balance
+                get_openai_balance()
+            elif choice == "3":
+                # List all batches
+                limit = input(
+                    "Enter the number of batches to list, from newest to oldest (default: 10): \t"
+                ).strip()
+                limit = int(limit) if limit.isdigit() else 10
+                after = (
+                    input("Enter the cursor for pagination (optional): \t").strip()
+                    or None
+                )
+                list_batches(url, limit=limit, after=after)
+            elif choice == "4":
+                # Cancel a batch
+                batch_id = input("Enter Batch ID to cancel: \t")
+                cancel_batch(batch_id)
+            elif choice == "5":
+                # View log file
+                view_log_file()
+
+            # **Configurations**
+            elif choice == "6":
                 # Configure paths
-                input_folder = (
-                    input(f"Enter input folder (current: {input_folder}): ").strip()
+                new_input_folder = (
+                    input(f"Enter input folder (current: {input_folder}): \t").strip()
                     or input_folder
                 )
-                batch_input_file = (
+                new_batch_input_file = (
                     input(
-                        f"Enter batch input file (current: {batch_input_file}): "
+                        f"Enter batch input file (current: {batch_input_file}): \t"
                     ).strip()
                     or batch_input_file
                 )
-                batch_output_file = (
+                new_batch_output_file = (
                     input(
-                        f"Enter batch output file (current: {batch_output_file}): "
+                        f"Enter batch output file (current: {batch_output_file}): \t"
                     ).strip()
                     or batch_output_file
                 )
-                output_folder = (
-                    input(f"Enter output folder (current: {output_folder}): ").strip()
+                new_output_folder = (
+                    input(f"Enter output folder (current: {output_folder}): \t").strip()
                     or output_folder
                 )
-                print(
-                    f"Paths updated:\nInput Folder: {input_folder}\nBatch Input File: {batch_input_file}\nBatch Output File: {batch_output_file}\nOutput Folder: {output_folder}"
+
+                # Update values
+                input_folder, batch_input_file, batch_output_file, output_folder = (
+                    new_input_folder,
+                    new_batch_input_file,
+                    new_batch_output_file,
+                    new_output_folder,
                 )
-            elif choice == "2":
+
+                # Save new configuration
+                config.update(
+                    {
+                        "input_folder": input_folder,
+                        "batch_input_file": batch_input_file,
+                        "batch_output_file": batch_output_file,
+                        "output_folder": output_folder,
+                    }
+                )
+                save_config(config)
+
+                print(
+                    f"Paths updated:\n"
+                    f"Input Folder: {input_folder}\n"
+                    f"Batch Input File: {batch_input_file}\n"
+                    f"Batch Output File: {batch_output_file}\n"
+                    f"Output Folder: {output_folder}"
+                )
+            elif choice == "7":
+                # Change model
+                new_model = input(
+                    "Enter the new model (leave empty to reset to default): \t"
+                ).strip()
+                if new_model:
+                    model = new_model
+                    config["model"] = model
+                    save_config(config)
+                print(f"\n\nModel updated to: {model}")
+            elif choice == "8":
                 # Update max_tokens
                 max_tokens_input = input(
-                    "Enter maximum tokens for responses (current: {}): ".format(
+                    "Enter maximum tokens for responses (current: {}): \t".format(
                         max_tokens
                     )
                 ).strip()
                 if max_tokens_input.isdigit():
                     max_tokens = int(max_tokens_input)
-                    print(f"`max_tokens` updated to {max_tokens}")
+                    config["max_tokens"] = max_tokens
+                    save_config(config)
+                    print(f"`Maximum completion tokens were updated to {max_tokens}")
                 else:
                     print("Invalid input. Please enter a positive integer.")
-            elif choice == "3":
+            elif choice == "9":
+                # Change API URL
+                new_url = input(
+                    f"Enter the new API URL (Current: {url} - Press Enter to keep): \t"
+                ).strip()
+                if new_url:
+                    url = new_url
+                    config["url"] = url
+                    save_config(config)
+                    print(f"API URL updated to: {url}")
+                else:
+                    print("API URL remains unchanged.")
+            elif choice == "10":
+                print("\n=== Current Prompts ===")
+                print(f"\n[System Prompt]:\n{system_prompt}\n")
+                print(f"[User Prompt]:\n{user_prompt}\n")
+
+                # Prompt user for new system prompt
+                new_system_prompt = input(
+                    "Enter new System Prompt (or press Enter to keep current): \t"
+                ).strip()
+                if new_system_prompt:
+                    system_prompt = new_system_prompt
+                    config["system_prompt"] = system_prompt
+                    logging.info("Updated system prompt.")
+
+                # Prompt user for new user prompt
+                new_user_prompt = input(
+                    "Enter new User Prompt (or press Enter to keep current): \t"
+                ).strip()
+                if new_user_prompt:
+                    config["user_prompt"] = user_prompt
+                    logging.info("Updated user prompt.")
+
+                save_config(config)
+                print("\nPrompts updated successfully.\n")
+            elif choice == "11":
+                # Toggle Structured Output
+                structured_output_enabled = not structured_output_enabled
+                config["structured_output_enabled"] = structured_output_enabled
+                save_config(config)
+                state = "enabled" if structured_output_enabled else "disabled"
+                logging.info(f"Structured Output feature has been {state}.")
+                print(f"Structured Output is now {state}.")
+            elif choice == "12":
+                # Set Pydantic Schema Path
+                new_path = input(
+                    f"Enter the new Pydantic Schema Path to file (Current: {pydantic_schema_path} - Press Enter to keep): \t"
+                ).strip()
+
+                if new_path:
+                    if os.path.isfile(new_path):
+                        pydantic_schema_path = new_path
+                        config["pydantic_schema_path"] = pydantic_schema_path
+                        save_config(config)
+                        print(
+                            f"Pydantic schema path updated to: {pydantic_schema_path}"
+                        )
+                    else:
+                        logging.warning(f"Invalid schema path provided: {new_path}")
+                        print(
+                            f"Error: The file {new_path} does not exist. Keeping the current path."
+                        )
+                else:
+                    print("No changes made to the Pydantic schema path.")
+            elif choice == "13":  # Assign a new menu option for schema selection
+                print(
+                    f"\n=== Available Pydantic Schemas in {pydantic_schema_path}===\n"
+                )
+                available_schemas = list_pydantic_classes(pydantic_schema_path)
+
+                if not available_schemas:
+                    print(
+                        "\nNo available schemas found. Ensure the schema file is correctly defined."
+                    )
+                else:
+                    for idx, schema in enumerate(available_schemas, start=1):
+                        print(f"{idx}. {schema}")
+
+                    schema_choice = input(
+                        "\nEnter the number corresponding to your desired schema (press Enter to keep current): \t"
+                    ).strip()
+
+                    if not schema_choice:  # User pressed Enter, keep current schema
+                        print(f"\n\nSchema class remains: {schema_class_name}")
+                    elif schema_choice.isdigit():
+                        schema_choice = int(schema_choice)
+                        if 1 <= schema_choice <= len(available_schemas):
+                            schema_class_name = available_schemas[schema_choice - 1]
+                            config["schema_class_name"] = schema_class_name
+                            save_config(config)
+                            logging.info(
+                                f"Schema class updated to: {schema_class_name}"
+                            )
+                            print(f"\n\nSchema class updated to: {schema_class_name}")
+                        else:
+                            print("\nInvalid choice. Please enter a valid number.")
+                    else:
+                        print(
+                            "\nInvalid input. Please enter a numeric value or press Enter to skip."
+                        )
+
+            # **Batch Processing Workflow**
+            elif choice == "14":
                 # Create batch input file
                 create_batch_input_jsonl(
                     input_folder,
@@ -1106,10 +1470,10 @@ ___  ___              _         _____        _____ ______  _____
                     structured_output_enabled,
                     pydantic_schema_path,
                 )
-            elif choice == "4":
+            elif choice == "15":
                 # Use existing batch input file
                 batch_input_file = input(
-                    "Enter the path of the existing .jsonl file: "
+                    "Enter the path of the existing .jsonl file: \t"
                 ).strip()
                 if not os.path.exists(batch_input_file):
                     print(f"File {batch_input_file} does not exist.")
@@ -1119,34 +1483,34 @@ ___  ___              _         _____        _____ ______  _____
                 else:
                     print(f"Using existing .jsonl file: {batch_input_file}")
                     logging.info(f"Using existing .jsonl file: {batch_input_file}")
-            elif choice == "5":
+            elif choice == "16":
                 # Upload batch input file
                 file_id = upload_batch_file(batch_input_file)
                 print(f"Remember this File ID for later: {file_id}")
-            elif choice == "6":
+            elif choice == "17":
                 # Create batch request
-                file_id = input("Enter File ID: ")
+                file_id = input("Enter File ID: \t")
                 completion_window = (
-                    input("Enter completion window (default: 24h): ").strip() or "24h"
+                    input("Enter completion window (default: 24h): \t").strip() or "24h"
                 )
                 metadata_description = input(
-                    "Enter metadata description (default: 'Default batch job'): "
+                    "Enter metadata description (default: 'Default batch job'): \t"
                 ).strip()
                 metadata = {"description": metadata_description or "Default batch job"}
                 batch_id = create_batch_request(
                     file_id, completion_window=completion_window, metadata=metadata
                 )
                 print(f"Remember this Batch ID for later: {batch_id}")
-            elif choice == "7":
+            elif choice == "18":
                 # Monitor batch processing
-                batch_id = input("Enter Batch ID: ")
+                batch_id = input("Enter Batch ID: \t")
                 result_file_id = monitor_batch(batch_id)
                 print(f"Remember this Result File ID for later: {result_file_id}")
-            elif choice == "8":
+            elif choice == "19":
                 # Download batch results
-                result_file_id = input("Enter Result File ID: ")
+                result_file_id = input("Enter Result File ID: \t")
                 download_batch_results(result_file_id, batch_output_file)
-            elif choice == "9":
+            elif choice == "20":
                 # Save responses as Markdown
                 save_responses_as_markdown(
                     batch_output_file,
@@ -1155,64 +1519,6 @@ ___  ___              _         _____        _____ ______  _____
                     pydantic_schema_path,
                     schema_class_name,
                 )
-            elif choice == "10":
-                # Change API URL
-                url = input(
-                    "Enter the new API URL (leave empty to reset to default): "
-                ).strip()
-                if not url:
-                    url = "/v1/chat/completions"
-                print(f"API URL updated to: {url}")
-            elif choice == "11":
-                # Change model
-                model = input(
-                    "Enter the new model (leave empty to reset to default): "
-                ).strip()
-                if not model:
-                    model = "gpt-4-vision"
-                print(f"Model updated to: {model}")
-            elif choice == "12":
-                # View instruction manual
-                display_instruction_manual()
-            elif choice == "13":
-                # Cancel a batch
-                batch_id = input("Enter Batch ID to cancel: ")
-                cancel_batch(batch_id)
-            elif choice == "14":
-                # List all batches
-                limit = input(
-                    "Enter the number of batches to list (default: 10): "
-                ).strip()
-                limit = int(limit) if limit.isdigit() else 10
-                after = (
-                    input("Enter the cursor for pagination (optional): ").strip()
-                    or None
-                )
-                list_batches(limit=limit, after=after)
-            elif choice == "15":
-                # Check OpenAI API Balance
-                get_openai_balance()
-            elif choice == "0":
-                print("\nExiting the program...\n\nBye.")
-                break
-            elif choice == "16":
-                # Toggle Structured Output
-                structured_output_enabled = not structured_output_enabled
-                state = "enabled" if structured_output_enabled else "disabled"
-                logging.info(f"Structured Output feature has been {state}.")
-                print(f"Structured Output is now {state}.")
-            elif choice == "17":
-                # Set Pydantic Schema Path
-                new_path = input("Enter the path to the Pydantic schema file: ").strip()
-                if os.path.isfile(new_path):
-                    pydantic_schema_path = new_path
-                    logging.info(
-                        f"Pydantic schema path updated to: {pydantic_schema_path}"
-                    )
-                    print(f"Schema path set to: {pydantic_schema_path}")
-                else:
-                    logging.warning(f"Invalid schema path provided: {new_path}")
-                    print(f"Error: The file {new_path} does not exist.")
             else:
                 print("Invalid choice. Please try again.")
         except Exception as e:
@@ -1220,7 +1526,8 @@ ___  ___              _         _____        _____ ______  _____
         finally:
             if choice != "0":
                 # Pause before returning to the menu
-                input("\nPress Enter to return to the menu...")
+                input("\nPress Enter to return to the menu...\t")
+                clear_screen()
 
 
 # Main Execution
