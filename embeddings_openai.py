@@ -8,6 +8,7 @@ import requests
 from helpers import *
 from dotenv import load_dotenv
 import collections
+import tiktoken
 
 # Persistence Configuration
 PERSISTENCE_FILE = "embeddings_openai_persistence.json"
@@ -137,7 +138,7 @@ def create_batch_input_jsonl(
     url="/v1/embeddings",
 ):
     """
-    Creates a .jsonl file from Markdown files in the input folder.
+    Creates a .jsonl file from Markdown files in the input folder, ensuring token limits are respected.
 
     Args:
         input_folder (str): Path to the folder containing Markdown files.
@@ -153,6 +154,17 @@ def create_batch_input_jsonl(
     """
     logging.info("Creating batch input JSONL file for embeddings...")
 
+    # Define model-specific max token limits
+    model_max_tokens = {
+        "text-embedding-3-small": 8191,
+        "text-embedding-3-large": 8191,
+        "text-embedding-ada-002": 8191,
+    }
+
+    max_tokens = model_max_tokens.get(
+        model, 8191
+    )  # Default to 8191 if model is unknown
+
     try:
         with open(output_file, "w") as outfile:
             for filename in os.listdir(input_folder):
@@ -166,6 +178,25 @@ def create_batch_input_jsonl(
                         logging.warning(f"Skipping empty Markdown file: {filename}")
                         continue
 
+                    # Count tokens using dynamic encoding selection
+                    num_tokens = count_tokens(content, model)
+
+                    # Handle token limit
+                    if num_tokens > max_tokens:
+                        logging.warning(
+                            f"File {filename} exceeds {max_tokens} tokens ({num_tokens} tokens). Truncating input..."
+                        )
+                        print(
+                            f"\033[33mWarning: {filename} has {num_tokens} tokens (exceeds {max_tokens}). Truncating input...\033[0m"
+                        )
+
+                        # Dynamically determine the encoding for truncation
+                        encoding = tiktoken.encoding_for_model(model)
+                        tokens = encoding.encode(content)
+                        content = encoding.decode(tokens[:max_tokens])
+                        num_tokens = max_tokens  # Update count after truncation
+
+                    # Construct request object
                     custom_id = os.path.splitext(filename)[0]  # Use filename as ID
                     request = construct_request_object(
                         custom_id=custom_id,
@@ -608,6 +639,27 @@ def get_openai_balance():
         return None
 
 
+def count_tokens(text: str, model: str) -> int:
+    """
+    Counts the number of tokens in a given text string based on the model's encoding.
+
+    Args:
+        text (str): The input text to tokenize.
+        model (str): The OpenAI model being used.
+
+    Returns:
+        int: The number of tokens in the input text.
+    """
+    try:
+        # Dynamically determine the encoding based on the model name
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # Default to cl100k_base if the model is unknown (as it covers many models)
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+    return len(encoding.encode(text))
+
+
 def view_log_file(log_file="embeddings_openai.log"):
     """
     Allows the user to view the last N lines of the log file.
@@ -922,9 +974,12 @@ def main_menu():
     # Initialize dimensionality-related settings
     dimensions = config.get("dimensions", None)
     use_dimensions = config.get("use_dimensions", False)
-    
+
     # Supported models for dimensionality
-    supported_dimensionality_models = {"text-embedding-3-small", "text-embedding-3-large"}
+    supported_dimensionality_models = {
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+    }
 
     while True:
         clear_screen()  # Clears terminal screen before showing the menu
@@ -988,10 +1043,13 @@ def main_menu():
                 f"\t11. Toggle Custom Dimensionality (\033[93mCurrent:\033[0m \033[96m{'Enabled' if use_dimensions else 'Disabled'}\033[0m)"
             )
             if use_dimensions:
-                print(f"\t   - Current Embedding Dimensions: \033[34m{dimensions if dimensions else 'Default'}\033[0m")
+                print(
+                    f"\t   - Current Embedding Dimensions: \033[34m{dimensions if dimensions else 'Default'}\033[0m"
+                )
         else:
-            print("\033[2;31m\nThe dimensionality feature is only supported for `text-embedding-3-small` and `text-embedding-3-large`\n\tand later models, as per this version of OpenAI API.\033[0m")
-
+            print(
+                "\033[2;31m\nThe dimensionality feature is only supported for `text-embedding-3-small` and `text-embedding-3-large`\n\tand later models, as per this version of OpenAI API.\033[0m"
+            )
 
         # **Batch Processing Workflow**
         print("\n\033[1mBatch Processing Workflow\033[0m")
@@ -1140,7 +1198,9 @@ def main_menu():
                 if use_dimensions:
                     while True:
                         print("\nSet the desired embedding dimensions.")
-                        print("Note: Default is 1536 for `text-embedding-3-small` and 3072 for `text-embedding-3-large`.")
+                        print(
+                            "Note: Default is 1536 for `text-embedding-3-small` and 3072 for `text-embedding-3-large`."
+                        )
                         dimensions_input = input(
                             "Enter the number of dimensions (or press Enter to keep default): "
                         ).strip()
@@ -1153,9 +1213,15 @@ def main_menu():
                             dimensions = int(dimensions_input)
 
                             if model == "text-embedding-3-small" and dimensions > 1536:
-                                print("Invalid choice. `text-embedding-3-small` supports a maximum of 1536 dimensions.")
-                            elif model == "text-embedding-3-large" and dimensions > 3072:
-                                print("Invalid choice. `text-embedding-3-large` supports a maximum of 3072 dimensions.")
+                                print(
+                                    "Invalid choice. `text-embedding-3-small` supports a maximum of 1536 dimensions."
+                                )
+                            elif (
+                                model == "text-embedding-3-large" and dimensions > 3072
+                            ):
+                                print(
+                                    "Invalid choice. `text-embedding-3-large` supports a maximum of 3072 dimensions."
+                                )
                             else:
                                 break
                         else:
@@ -1179,6 +1245,8 @@ def main_menu():
                     batch_input_file,
                     model,
                     encoding_format,
+                    dimensions,
+                    use_dimensions,
                     url,
                 )
             elif choice == "13":
