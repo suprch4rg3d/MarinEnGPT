@@ -587,11 +587,6 @@ def save_responses_as_markdown(
                                     value = parsed_content.get(field, "N/A")
                                     markdown_content += f"## {field.replace('_', ' ').title()}\n{value}\n\n"
 
-                                    if isinstance(value, list):
-                                        for item in value:
-                                            markdown_content += f"- {item}\n"
-                                    else:
-                                        markdown_content += f"{value}\n\n"
                             else:
                                 logging.warning(
                                     f"No structured output detected for {custom_id}. Check your schema settings."
@@ -677,7 +672,7 @@ def list_batches(url, limit=10, after=None):
 
         # Retrieve batches from OpenAI API with pagination
         response = openai.batches.list(**params)
-        
+
         # Extract only relevant batches
         batches = [batch for batch in response if batch.endpoint == url]
 
