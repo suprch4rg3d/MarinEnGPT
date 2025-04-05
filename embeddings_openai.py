@@ -983,8 +983,8 @@ def connect_to_existing_chromadb():
                 desc = col["description"]
                 created = col["created_at"]
 
-                name_lines = textwrap.wrap(name, name_width)
-                desc_lines = textwrap.wrap(desc, desc_width)
+                name_lines = wrap(name, name_width)
+                desc_lines = wrap(desc, desc_width)
                 max_lines = max(len(name_lines), len(desc_lines))
                 is_default = name == default_collection
 
