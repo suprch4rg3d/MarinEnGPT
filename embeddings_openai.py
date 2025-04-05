@@ -10,6 +10,7 @@ from helpers import *
 from dotenv import load_dotenv
 import collections
 import tiktoken
+from chromadb.config import Settings
 import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from math import ceil
@@ -829,16 +830,23 @@ def initialize_chromadb(persistent_path=None):
             print("\nChromaDB initialization aborted.")
             return chromadb_client  # Return existing instance
 
+    # Disable telemetry in both modes
+    settings = Settings(anonymized_telemetry=False)
+
     if persistent_path and os.path.exists(persistent_path):
         print(f"\nReconnecting to existing ChromaDB instance at: {persistent_path}")
-        chromadb_client = chromadb.PersistentClient(path=persistent_path)
+        chromadb_client = chromadb.PersistentClient(
+            path=persistent_path, settings=settings
+        )
     else:
         if persistent_path:
             print("\nInitializing ChromaDB in persistent mode...")
-            chromadb_client = chromadb.PersistentClient(path=persistent_path)
+            chromadb_client = chromadb.PersistentClient(
+                path=persistent_path, settings=settings
+            )
         else:
             print("\nInitializing ChromaDB in in-memory mode...")
-            chromadb_client = chromadb.Client()
+            chromadb_client = chromadb.Client(settings=settings)
 
     return chromadb_client
 
@@ -866,12 +874,12 @@ def connect_to_existing_chromadb():
     Connect to an existing ChromaDB persistent instance and list collections.
     Adds pagination, filtering, sorting, text wrapping, and highlights the last used collection.
     """
-    import textwrap
-    from math import ceil
-
     global chromadb_client
     config = load_config()
     default_collection = config.get("chromadb_collection_name", "")
+
+    # Disable telemetry in both modes
+    settings = Settings(anonymized_telemetry=False)
 
     while True:
         existing_path = input(
@@ -893,7 +901,9 @@ def connect_to_existing_chromadb():
                 return config
 
         try:
-            chromadb_client = chromadb.PersistentClient(path=existing_path)
+            chromadb_client = chromadb.PersistentClient(
+                path=existing_path, settings=settings
+            )
             print("\033[32mSuccessfully connected to the ChromaDB instance.\033[0m")
         except Exception as e:
             print(f"\033[31mConnection failed:\033[0m {e}")
@@ -2516,7 +2526,9 @@ def perform_semantic_search():
             example_embedding = any_doc["embeddings"][0]
             collection_dim = len(example_embedding)
         except Exception as e:
-            print(f"\033[31mFailed to detect collection embedding dimension:\033[0m {e}")
+            print(
+                f"\033[31mFailed to detect collection embedding dimension:\033[0m {e}"
+            )
             return
 
         # Choose appropriate model
@@ -2533,7 +2545,9 @@ def perform_semantic_search():
             model = "text-embedding-ada-002"
             dimensions = None
         else:
-            print(f"\033[31mUnsupported collection dimensionality: {collection_dim}\033[0m")
+            print(
+                f"\033[31mUnsupported collection dimensionality: {collection_dim}\033[0m"
+            )
             return
 
         # Generate embedding
@@ -2567,7 +2581,10 @@ def perform_semantic_search():
                     continue
                 if not (min_tokens <= meta.get("token_count", 0) <= max_tokens):
                     continue
-                if file_filter and file_filter not in meta.get("source_file", "").lower():
+                if (
+                    file_filter
+                    and file_filter not in meta.get("source_file", "").lower()
+                ):
                     continue
                 similarity = 1 / (1 + dist)
                 similarity_percent = similarity * 100
@@ -2586,7 +2603,9 @@ def perform_semantic_search():
                 print("\033[33mNo results matched your filters.\033[0m")
                 input("Press Enter to return to the menu...")
             else:
-                interactive_search_results(filtered_results, query=query, collection_name=collection_name)
+                interactive_search_results(
+                    filtered_results, query=query, collection_name=collection_name
+                )
 
         except Exception as e:
             print(f"\033[31mSearch failed:\033[0m {e}")
