@@ -1,11 +1,12 @@
-data
-storage
+data/
+storage/
 batch_input.jsonl
 batch_output.jsonl
 ocr_openai_persistence.json
 embeddings_batch_input.jsonl
 embeddings_batch_output.jsonl
 embeddings_openai_persistence.json
+schemas/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
