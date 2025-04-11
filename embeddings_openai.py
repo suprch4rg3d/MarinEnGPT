@@ -1847,10 +1847,14 @@ def list_available_embedding_files(output_path="./data/vectors", per_page=5):
 
 
 def load_embeddings_into_chromadb(
-    file_path, collection, use_batch=True, batch_size=100
+    file_path,
+    collection,
+    use_batch=True,
+    batch_size=100,
 ):
     """
     Loads pre-generated embeddings from a JSON file into ChromaDB with optional batch insertion.
+    Includes 'documents' based on markdown files derived from custom_id.
 
     Args:
         file_path (str): Path to the JSON file containing embeddings.
@@ -1862,6 +1866,9 @@ def load_embeddings_into_chromadb(
         Exception: If the JSON file cannot be read or processed.
     """
     try:
+        config = load_config()
+        input_folder = config.get("input_folder", "./data/markdown")
+
         start_time = datetime.now()
         logging.info(
             f"Started loading embeddings from '{file_path}' into collection '{collection.name}'"
@@ -1881,12 +1888,28 @@ def load_embeddings_into_chromadb(
         progress = tqdm(total=total, desc="Inserting Embeddings", ncols=100)
 
         if use_batch:
-            batch_ids, batch_embeddings, batch_metadatas = [], [], []
+            batch_ids, batch_embeddings, batch_metadatas, batch_documents = (
+                [],
+                [],
+                [],
+                [],
+            )
 
             for item in embeddings:
                 try:
-                    batch_ids.append(item["custom_id"])
-                    batch_embeddings.append(item["embedding"])
+                    custom_id = item["custom_id"]
+                    embedding = item["embedding"]
+
+                    # Locate markdown file path directly by resolving parametric input_folder and custom_id
+                    md_file = os.path.join(input_folder, custom_id + ".md")
+                    document_text = ""
+                    if os.path.exists(md_file):
+                        with open(md_file, "r", encoding="utf-8") as md:
+                            document_text = md.read()
+
+                    batch_ids.append(custom_id)
+                    batch_embeddings.append(embedding)
+                    batch_documents.append(document_text)
                     metadata = {
                         "model": item.get("model", "unknown"),
                         "token_count": item["usage"].get("total_tokens", 0),
@@ -1894,6 +1917,7 @@ def load_embeddings_into_chromadb(
                     }
                     total_tokens += metadata["token_count"]
                     batch_metadatas.append(metadata)
+
                 except Exception as e:
                     logging.warning(f"Skipping malformed embedding item: {e}")
                     continue
@@ -1903,16 +1927,23 @@ def load_embeddings_into_chromadb(
                         ids=batch_ids,
                         embeddings=batch_embeddings,
                         metadatas=batch_metadatas,
+                        documents=batch_documents,
                     )
                     progress.update(len(batch_ids))
                     logging.info(f"Inserted batch of {len(batch_ids)} embeddings.")
-                    batch_ids, batch_embeddings, batch_metadatas = [], [], []
+                    batch_ids, batch_embeddings, batch_metadatas, batch_documents = (
+                        [],
+                        [],
+                        [],
+                        [],
+                    )
 
             if batch_ids:
                 collection.add(
                     ids=batch_ids,
                     embeddings=batch_embeddings,
                     metadatas=batch_metadatas,
+                    documents=batch_documents,
                 )
                 progress.update(len(batch_ids))
                 logging.info(f"Inserted final batch of {len(batch_ids)} embeddings.")
@@ -1920,8 +1951,15 @@ def load_embeddings_into_chromadb(
         else:
             for item in embeddings:
                 try:
+                    custom_id = item["custom_id"]
+                    md_file = os.path.join(input_folder, custom_id + ".md")
+                    document_text = ""
+                    if os.path.exists(md_file):
+                        with open(md_file, "r", encoding="utf-8") as md:
+                            document_text = md.read()
+
                     collection.add(
-                        ids=[item["custom_id"]],
+                        ids=[custom_id],
                         embeddings=[item["embedding"]],
                         metadatas=[
                             {
@@ -1930,6 +1968,7 @@ def load_embeddings_into_chromadb(
                                 "source_file": file_path,
                             }
                         ],
+                        documents=[document_text],
                     )
                     total_tokens += item["usage"].get("total_tokens", 0)
                     progress.update(1)
@@ -1970,6 +2009,7 @@ def load_embeddings_into_chromadb_ui(client, config):
     """
     output_folder = config.get("output_folder", "./data/vectors")
     collection_name = config.get("chromadb_collection_name")
+    input_folder = config.get("input_folder", "./data/markdown")
 
     if not client or not is_chromadb_active(client):
         print(
@@ -2261,7 +2301,7 @@ def load_embeddings_into_chromadb_ui(client, config):
 def view_embedding_metadata():
     """
     Displays stored metadata of embeddings in the active ChromaDB collection.
-    Includes pagination, sorting, filtering, and wrapped filenames.
+    Includes pagination, sorting, filtering, and viewing document content.
     """
     client = get_chromadb_client()
     config = load_config()
@@ -2275,8 +2315,9 @@ def view_embedding_metadata():
     collection_name = config.get("chromadb_collection_name", "")
     try:
         collection = get_or_create_collection(client, collection_name)
-        results = collection.get(include=["metadatas"])
+        results = collection.get(include=["metadatas", "documents"])
         metadatas = results.get("metadatas", [])
+        documents = results.get("documents", [])
         ids = results.get("ids", [])
     except Exception as e:
         print(f"\033[31mFailed to fetch metadata:\033[0m {e}")
@@ -2300,6 +2341,7 @@ def view_embedding_metadata():
                 "model": meta.get("model", "unknown"),
                 "token_count": meta.get("token_count", 0),
                 "source_file": meta.get("source_file", "N/A"),
+                "document": documents[i] if i < len(documents) else "",
             }
         )
 
@@ -2376,13 +2418,22 @@ def view_embedding_metadata():
         print(f"(Page {page}/{total_pages})")
 
         print("\nOptions:")
-        print("  [n] Next Page")
-        print("  [p] Previous Page")
-        print("  [f] Filter")
-        print("  [r] Reset Filters")
-        print("  [s] Sort")
-        print("  [b] Back to Group Selection")
-        print("  [q] Quit to Menu")
+        options = [
+            "[n] Next Page",
+            "[p] Previous Page",
+            "[v] View Document Content",
+            "[f] Filter",
+            "[r] Reset Filters",
+            "[s] Sort",
+            "[b] Back to Group Selection",
+            "[q] Quit to Menu",
+        ]
+
+        # Print two per line
+        for i in range(0, len(options), 2):
+            left = options[i]
+            right = options[i + 1] if i + 1 < len(options) else ""
+            print(f"  {left:<32}{right}")
 
         cmd = input("\nEnter your choice: ").strip().lower()
 
@@ -2396,6 +2447,54 @@ def view_embedding_metadata():
                 page -= 1
             else:
                 input("Already on the first page. Press Enter to continue...")
+        elif cmd == "v":
+            row_input = input(
+                "Enter the embedding's row number to view its document: "
+            ).strip()
+            if row_input.isdigit():
+                idx = int(row_input)
+                if 1 <= idx <= len(current_data):
+                    entry = current_data[idx - 1]
+                    doc = entry.get("document", "")
+                    entry_id = entry.get("custom_id", "Unknown ID")
+
+                    def format_document(doc_text):
+                        lines = doc_text.strip().split("\n")
+                        formatted_lines = []
+                        ANSI_CYAN = "\033[36m"
+                        ANSI_RESET = "\033[0m"
+
+                        for line in lines:
+                            line = line.strip()
+                            if not line:
+                                formatted_lines.append("")
+                                continue
+                            elif line.startswith("#"):
+                                header = line.lstrip("#").strip()
+                                formatted_lines.append(
+                                    f"{ANSI_CYAN}{header}{ANSI_RESET}"
+                                )
+                            else:
+                                wrapped = wrap(line, width=80)
+                                formatted_lines.extend(wrapped)
+                        return "\n".join(formatted_lines)
+
+                    clear_screen()
+                    print(f"\n\033[1mDocument for:\033[0m \033[1;96m{entry_id}\033[0m")
+                    print("─" * 80)
+
+                    if isinstance(doc, str) and doc.strip():
+                        print(format_document(doc))
+                    else:
+                        print("\033[33mNo document found.\033[0m")
+
+                    print("\n" + "─" * 80)
+                    print("\033[1;93m[Press Enter to return...]\033[0m")
+                    input()
+                    
+                else:
+                    print("Invalid row number.")
+                    input("Press Enter to continue...")
         elif cmd == "f":
             print("\nEnter filters (leave blank to skip):")
 
