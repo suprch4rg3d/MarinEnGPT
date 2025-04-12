@@ -50,6 +50,8 @@ def load_config():
         "chromadb_persistence_path": "./data/chromadb",
         "chromadb_collection_name": "MarineEngineeringManuals",
         "chromadb_distance_function": "cosine",
+        "chunk_size": 15,
+        "chunk_overlap": 7,
     }
 
     if not os.path.exists(PERSISTENCE_FILE):
@@ -1846,21 +1848,103 @@ def list_available_embedding_files(output_path="./data/vectors", per_page=5):
             input("Press Enter to continue...")
 
 
+def split_text_into_chunks(text, chunk_size=15, overlap=7):
+    """
+    Splits the input text into chunks of approximately `chunk_size` words with `overlap` between chunks.
+    """
+    words = text.split()
+    chunks = []
+    start = 0
+
+    while start < len(words):
+        end = start + chunk_size
+        chunk = " ".join(words[start:end])
+        chunks.append(chunk)
+        start += chunk_size - overlap
+
+    return chunks
+
+
+def generate_chunked_ids(base_custom_id, num_chunks):
+    """
+    Generates a list of chunked custom IDs like 'ABC-123_page_5_chunk_1'.
+    """
+    return [f"{base_custom_id}_chunk_{i+1}" for i in range(num_chunks)]
+
+
+def chunk_and_prepare_embedding_entries(
+    base_custom_id, full_text, original_metadata, chunk_size=15, overlap=7
+):
+    """
+    Splits a document's text into smaller overlapping chunks and prepares embedding entries for each chunk.
+
+    Args:
+        base_custom_id (str): The original custom ID of the full document/page (e.g., 'ABC-123_page_5').
+        full_text (str): The full text content to be split and embedded.
+        original_metadata (dict): Metadata associated with the full document (e.g., model, token count).
+        chunk_size (int): Approximate number of words per chunk. Default is 15.
+        overlap (int): Number of overlapping words between consecutive chunks. Default is 7.
+
+    Returns:
+        List[dict]: A list of dictionaries, each containing:
+            - 'custom_id': A unique ID for the chunk (e.g., 'ABC-123_page_5_chunk_1').
+            - 'document': The chunked text content.
+            - 'metadata': Copied original metadata + chunk-specific info (chunk index, parent ID).
+    """
+    chunks = split_text_into_chunks(full_text, chunk_size, overlap)
+    chunk_ids = generate_chunked_ids(base_custom_id, len(chunks))
+
+    prepared_entries = []
+    for idx, (chunk_id, chunk_text) in enumerate(zip(chunk_ids, chunks)):
+        chunk_metadata = original_metadata.copy()
+        chunk_metadata["chunk_index"] = idx + 1
+        chunk_metadata["parent_id"] = base_custom_id
+        chunk_metadata["is_chunk"] = True
+
+        prepared_entries.append(
+            {"custom_id": chunk_id, "document": chunk_text, "metadata": chunk_metadata}
+        )
+
+    return prepared_entries
+
+
+def extract_base_id(custom_id):
+    """
+    Extracts the base ID by removing '_chunk_#' if present.
+    """
+    return re.sub(r"_chunk_\d+$", "", custom_id)
+
+
+def detect_group_id(custom_id):
+    """
+    Extracts the logical group ID by removing both `_chunk_#` and `_page_#`.
+    Returns: e.g. 'MF-194' from 'MF-194_page_1_chunk_3'
+    """
+    base = re.sub(r"_chunk_\d+$", "", custom_id)
+    return re.sub(r"_page_\d+$", "", base)
+
+
 def load_embeddings_into_chromadb(
     file_path,
     collection,
     use_batch=True,
     batch_size=100,
+    enable_chunking=True,
+    chunk_size=15,
+    overlap=7,
 ):
     """
-    Loads pre-generated embeddings from a JSON file into ChromaDB with optional batch insertion.
-    Includes 'documents' based on markdown files derived from custom_id.
+    Loads pre-generated embeddings from a JSON file into ChromaDB with optional chunking and batch insertion.
+    If chunking is enabled, the document associated with each embedding will be split into smaller chunks.
 
     Args:
         file_path (str): Path to the JSON file containing embeddings.
         collection (chromadb.Collection): ChromaDB collection to store the embeddings.
         use_batch (bool): Whether to use batch insertion.
         batch_size (int): Size of each batch for batch insertion.
+        enable_chunking (bool): Whether to split the documents into smaller chunks before insertion.
+        chunk_size (int): Target chunk size (in words) for splitting.
+        overlap (int): Number of overlapping words between chunks.
 
     Raises:
         Exception: If the JSON file cannot be read or processed.
@@ -1878,15 +1962,86 @@ def load_embeddings_into_chromadb(
         print(f"Insertion mode: {'Batch' if use_batch else 'Single'}")
         if use_batch:
             print(f"Batch size: {batch_size}")
+        print(f"Chunking enabled: {enable_chunking}")
         print(f"Started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
         with open(file_path, "r", encoding="utf-8") as file:
             embeddings = json.load(file)
 
         total_tokens = 0
-        total = len(embeddings)
+        all_entries = []
+
+        for item in embeddings:
+            try:
+                custom_id = item["custom_id"]
+                embedding = item["embedding"]
+
+                # Try to load associated markdown document
+                md_file = os.path.join(input_folder, custom_id + ".md")
+                document_text = ""
+                if os.path.exists(md_file):
+                    with open(md_file, "r", encoding="utf-8") as md:
+                        document_text = md.read()
+
+                base_metadata = {
+                    "model": item.get("model", "unknown"),
+                    "token_count": item["usage"].get("total_tokens", 0),
+                    "source_file": file_path,
+                }
+                total_tokens += base_metadata["token_count"]
+
+                # Prepare entries - Not using the function chunk_and_prepare_embedding_entries() because we would be make many tqdms instead of one and inline
+                if enable_chunking and document_text:
+                    print(f"Preparing chunks for: {custom_id}")
+                    chunks_raw = split_text_into_chunks(document_text, chunk_size, overlap)
+                    chunk_ids = generate_chunked_ids(custom_id, len(chunks_raw))
+
+                    chunk_progress = tqdm(total=len(chunks_raw), desc="Chunking", ncols=80)
+
+                    for idx, (chunk_id, chunk_text) in enumerate(zip(chunk_ids, chunks_raw)):
+                        chunk_metadata = base_metadata.copy()
+                        chunk_metadata["chunk_index"] = idx + 1
+                        chunk_metadata["parent_id"] = custom_id
+                        chunk_metadata["is_chunk"] = True
+
+                        chunk_entry = {
+                            "custom_id": chunk_id,
+                            "embedding": embedding,  # reuse
+                            "document": chunk_text,
+                            "metadata": chunk_metadata,
+                        }
+
+                        all_entries.append(chunk_entry)
+                        chunk_progress.update(1)
+
+                    chunk_progress.close()
+                    print("\033[32m\033[1m✓ Chunking completed\033[0m\n")
+                else:
+                    all_entries.append(
+                        {
+                            "custom_id": custom_id,
+                            "embedding": embedding,
+                            "document": document_text,
+                            "metadata": base_metadata,
+                        }
+                    )
+            except Exception as e:
+                logging.warning(f"Skipping malformed embedding item: {e}")
+                continue
+
+        total = len(all_entries)
+        print("\n\033[1mLoading Configuration:\033[0m")
+        print(f"  Chunking enabled: \033[36m{enable_chunking}\033[0m")
+        if enable_chunking:
+            print(f"  Chunk size: \033[36m{chunk_size}\033[0m")
+            print(f"  Overlap: \033[36m{overlap}\033[0m")
+        print(f"  Batch insertion: \033[36m{use_batch}\033[0m")
+        if use_batch:
+            print(f"  Batch size: \033[36m{batch_size}\033[0m")
+        print()
         progress = tqdm(total=total, desc="Inserting Embeddings", ncols=100)
 
+        # Insert into ChromaDB
         if use_batch:
             batch_ids, batch_embeddings, batch_metadatas, batch_documents = (
                 [],
@@ -1894,33 +2049,11 @@ def load_embeddings_into_chromadb(
                 [],
                 [],
             )
-
-            for item in embeddings:
-                try:
-                    custom_id = item["custom_id"]
-                    embedding = item["embedding"]
-
-                    # Locate markdown file path directly by resolving parametric input_folder and custom_id
-                    md_file = os.path.join(input_folder, custom_id + ".md")
-                    document_text = ""
-                    if os.path.exists(md_file):
-                        with open(md_file, "r", encoding="utf-8") as md:
-                            document_text = md.read()
-
-                    batch_ids.append(custom_id)
-                    batch_embeddings.append(embedding)
-                    batch_documents.append(document_text)
-                    metadata = {
-                        "model": item.get("model", "unknown"),
-                        "token_count": item["usage"].get("total_tokens", 0),
-                        "source_file": file_path,
-                    }
-                    total_tokens += metadata["token_count"]
-                    batch_metadatas.append(metadata)
-
-                except Exception as e:
-                    logging.warning(f"Skipping malformed embedding item: {e}")
-                    continue
+            for entry in all_entries:
+                batch_ids.append(entry["custom_id"])
+                batch_embeddings.append(entry["embedding"])
+                batch_metadatas.append(entry["metadata"])
+                batch_documents.append(entry["document"])
 
                 if len(batch_ids) >= batch_size:
                     collection.add(
@@ -1947,37 +2080,21 @@ def load_embeddings_into_chromadb(
                 )
                 progress.update(len(batch_ids))
                 logging.info(f"Inserted final batch of {len(batch_ids)} embeddings.")
-
         else:
-            for item in embeddings:
+            for entry in all_entries:
                 try:
-                    custom_id = item["custom_id"]
-                    md_file = os.path.join(input_folder, custom_id + ".md")
-                    document_text = ""
-                    if os.path.exists(md_file):
-                        with open(md_file, "r", encoding="utf-8") as md:
-                            document_text = md.read()
-
                     collection.add(
-                        ids=[custom_id],
-                        embeddings=[item["embedding"]],
-                        metadatas=[
-                            {
-                                "model": item.get("model", "unknown"),
-                                "token_count": item["usage"].get("total_tokens", 0),
-                                "source_file": file_path,
-                            }
-                        ],
-                        documents=[document_text],
+                        ids=[entry["custom_id"]],
+                        embeddings=[entry["embedding"]],
+                        metadatas=[entry["metadata"]],
+                        documents=[entry["document"]],
                     )
-                    total_tokens += item["usage"].get("total_tokens", 0)
                     progress.update(1)
                 except Exception as e:
-                    logging.warning(f"Skipping failed individual insertion: {e}")
+                    logging.warning(f"Skipping failed insertion: {e}")
                     continue
 
         progress.close()
-
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
         print(
@@ -2142,6 +2259,7 @@ def load_embeddings_into_chromadb_ui(client, config):
         print("  [f] Filter")
         print("  [r] Reset Filters")
         print("  [s] Sort")
+        print("  [c] Configure Chunking")
         print("  [l] Load Embedding File")
         print("  [q] Quit to Menu")
 
@@ -2217,6 +2335,52 @@ def load_embeddings_into_chromadb_ui(client, config):
             else:
                 print("Invalid sort option.")
                 input("Press Enter to continue...")
+        elif cmd == "c":
+            current_chunk_size = config.get("chunk_size", 15)
+            current_overlap = config.get("chunk_overlap", 7)
+
+            print("\n\033[1mConfigure Chunking Parameters\033[0m")
+            print("\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m")
+            print("\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m")
+            print(f"\nCurrent chunk size: \033[36m{current_chunk_size}\033[0m")
+            print(f"Current overlap: \033[36m{current_overlap}\033[0m")
+            print("Press Enter to keep current values.")
+
+            try:
+                new_size = input("Enter new chunk size (number of words per chunk): ").strip()
+                new_overlap = input("Enter new overlap (number of overlapping words): ").strip()
+
+                updated = False
+
+                if new_size:
+                    if new_size.isdigit():
+                        config["chunk_size"] = int(new_size)
+                        logging.info(f"Chunk size updated to {new_size}")
+                        updated = True
+                    else:
+                        print("Invalid chunk size. Keeping current.")
+                        logging.warning(f"Invalid chunk size input: {new_size}")
+
+                if new_overlap:
+                    if new_overlap.isdigit():
+                        config["chunk_overlap"] = int(new_overlap)
+                        logging.info(f"Chunk overlap updated to {new_overlap}")
+                        updated = True
+                    else:
+                        print("Invalid overlap. Keeping current.")
+                        logging.warning(f"Invalid chunk overlap input: {new_overlap}")
+
+                if updated:
+                    save_config(config)
+                    print("\033[32mChunking configuration updated.\033[0m")
+                else:
+                    print("No changes made to chunking configuration.")
+
+            except Exception as e:
+                print(f"\033[33mWarning:\033[0m Failed to update config: {e}")
+                logging.error(f"Failed to update chunking config: {e}")
+
+            input("Press Enter to return to the menu...")
         elif cmd == "l":
             selection = input("Enter the number of the file to load: ").strip()
             if selection.isdigit():
@@ -2255,6 +2419,28 @@ def load_embeddings_into_chromadb_ui(client, config):
                                 input("Press Enter to return to the menu...")
                                 continue  # Return to the menu without reloading
 
+                        # Ask whether to enable chunking before loading
+                        print("\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m")
+                        print("\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m\n")
+                        print("\nDo you want to enable chunking of document text before loading?")
+                        chunk_input = input("Enable chunking? (yes/no) [default: yes]: ").strip().lower()
+                        # use_chunking = chunk_input == "yes"
+                        use_chunking = chunk_input != "no"
+
+                        chunk_size = 15
+                        overlap = 7
+
+                        if use_chunking:
+                            try:
+                                chunk_size_input = input("Enter chunk size (words per chunk) [default: 15]: ").strip()
+                                if chunk_size_input.isdigit():
+                                    chunk_size = int(chunk_size_input)
+                                overlap_input = input("Enter chunk overlap [default: 7]: ").strip()
+                                if overlap_input.isdigit():
+                                    overlap = int(overlap_input)
+                            except Exception as e:
+                                print(f"\033[33mWarning:\033[0m Invalid chunking input. Using defaults (chunk_size=15, overlap=7)")
+
                         # Prompt user for batch insertion
                         print("\nWould you like to use batch insertion?")
                         use_batch_input = (
@@ -2267,6 +2453,10 @@ def load_embeddings_into_chromadb_ui(client, config):
                         # Ask for batch size if batch is used
                         batch_size = 100
                         if use_batch:
+                            print("\n\033[94mBatch Size Guide:\033[0m")
+                            print("  • Recommended range: \033[96m100–500\033[0m")
+                            print("  • Small batches (<50) may slow down insertion")
+                            print("  • Huge batches (>1000) may cause memory or timeout issues\n")
                             size_input = input(
                                 "Enter batch size (default: 100): "
                             ).strip()
@@ -2279,6 +2469,9 @@ def load_embeddings_into_chromadb_ui(client, config):
                             collection=collection,
                             use_batch=use_batch,
                             batch_size=batch_size,
+                            enable_chunking=use_chunking,
+                            chunk_size=chunk_size,
+                            overlap=overlap,
                         )
                         input(
                             "Embedding loaded successfully. Press Enter to continue..."
@@ -2333,15 +2526,15 @@ def view_embedding_metadata():
 
     for i, meta in enumerate(metadatas):
         full_id = ids[i]
-        match = page_pattern.match(full_id)
-        base_id = match.group(1) if match else full_id  # fallback: use full_id
-        grouped[base_id].append(
+        group_id = detect_group_id(full_id)  # e.g., MF-194
+        grouped[group_id].append(
             {
                 "custom_id": full_id,
                 "model": meta.get("model", "unknown"),
                 "token_count": meta.get("token_count", 0),
                 "source_file": meta.get("source_file", "N/A"),
                 "document": documents[i] if i < len(documents) else "",
+                "metadata": meta,
             }
         )
 
@@ -2372,6 +2565,24 @@ def view_embedding_metadata():
     page = 1
     per_page = 10
 
+    # Check if this group contains chunked entries
+    is_chunked = any("chunk_index" in entry["metadata"] for entry in entries)
+    show_analytics = False
+
+    if is_chunked:
+        indices = sorted(
+            [entry["metadata"].get("chunk_index", 0) for entry in entries]
+        )
+        parent_ids = {
+            entry["metadata"].get("parent_id", "N/A") for entry in entries
+        }
+        parent_str = ", ".join(sorted(parent_ids))
+
+        print("\n\033[1mThis group contains chunked entries:\033[0m")
+        print(f"  • Total Chunks: {len(indices)}")
+        print(f"  • Chunk Indices: {min(indices)}–{max(indices)}")
+        print(f"  • Parent ID(s): {parent_str}")
+
     while True:
         clear_screen()
         total_pages = ceil(len(current_data) / per_page)
@@ -2387,6 +2598,17 @@ def view_embedding_metadata():
         # Header
         print(f"\n\033[1mMetadata for Group: {selected_group}\033[0m")
         print(f"Total Embeddings: {len(entries)} | Total Tokens: {total_tokens}")
+        if is_chunked and show_analytics:
+            chunk_tokens = [entry["token_count"] for entry in entries]
+            model_names = {entry["model"] for entry in entries}
+            source_files = {entry["source_file"] for entry in entries}
+
+            print("\033[1mChunk Group Analytics:\033[0m")
+            print(f"  • Total Tokens: {sum(chunk_tokens)}")
+            print(f"  • Avg Tokens per Chunk: {sum(chunk_tokens) // len(chunk_tokens)}")
+            print(f"  • Token Range: {min(chunk_tokens)}–{max(chunk_tokens)}")
+            print(f"  • Model(s): {', '.join(sorted(model_names))}")
+            print(f"  • Source File(s): {', '.join(sorted(source_files))}")
         print("=" * total_width)
         print(
             f"{'#':<4} {'Custom ID':<{id_width}} {'Model':<{model_width}} {'Tokens':<{token_width}} {'Source File'}"
@@ -2428,6 +2650,9 @@ def view_embedding_metadata():
             "[b] Back to Group Selection",
             "[q] Quit to Menu",
         ]
+
+        if is_chunked:
+            options.insert(-2, "[a] Toggle Chunk Analytics")
 
         # Print two per line
         for i in range(0, len(options), 2):
@@ -2491,7 +2716,7 @@ def view_embedding_metadata():
                     print("\n" + "─" * 80)
                     print("\033[1;93m[Press Enter to return...]\033[0m")
                     input()
-                    
+
                 else:
                     print("Invalid row number.")
                     input("Press Enter to continue...")
@@ -2507,6 +2732,8 @@ def view_embedding_metadata():
             min_tokens = input("Minimum token count: ").strip()
             max_tokens = input("Maximum token count: ").strip()
 
+            chunk_filter = input("Specific chunk index (or leave blank): ").strip()
+
             filtered = entries
             if model_filter:
                 filtered = [e for e in filtered if model_filter in e["model"].lower()]
@@ -2519,6 +2746,9 @@ def view_embedding_metadata():
             if max_tokens.isdigit():
                 filtered = [e for e in filtered if e["token_count"] <= int(max_tokens)]
 
+            if chunk_filter.isdigit():
+                filtered = [e for e in filtered if e["metadata"].get("chunk_index") == int(chunk_filter)]
+
             current_data = filtered
             page = 1
         elif cmd == "r":
@@ -2530,22 +2760,31 @@ def view_embedding_metadata():
             print("  2. Model")
             print("  3. Token Count")
             print("  4. Source File")
+            if any("chunk_index" in e["metadata"] for e in current_data):
+                print("  5. Chunk Index")
             sort_choice = input("Enter number: ").strip()
             sort_map = {
                 "1": "custom_id",
                 "2": "model",
                 "3": "token_count",
                 "4": "source_file",
+                "5": "chunk_index",
             }
             key = sort_map.get(sort_choice)
             if key:
                 reverse = input("Descending? (yes/no): ").strip().lower() == "yes"
                 current_data = sorted(
                     current_data,
-                    key=lambda x: x[key].lower() if isinstance(x[key], str) else x[key],
+                    key=lambda x: (
+                        x["metadata"].get("chunk_index", 0)
+                        if key == "chunk_index"
+                        else (x[key].lower() if isinstance(x[key], str) else x[key])
+                    ),
                     reverse=reverse,
                 )
                 page = 1
+        elif cmd == "a" and is_chunked:
+            show_analytics = not show_analytics
         elif cmd == "b":
             return view_embedding_metadata()
         elif cmd == "q":
