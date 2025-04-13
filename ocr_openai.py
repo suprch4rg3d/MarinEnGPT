@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 import inspect
 import collections
+import tomllib
 
 # Persistence Configuration
 PERSISTENCE_FILE = "ocr_openai_persistence.json"
@@ -1142,34 +1143,39 @@ def main_menu():
     """
     Main menu to interact with the batch processing workflow.
     """
-    # Default paths and parameters
-    config = load_config()  # Load persisted config
-
-    input_folder = config["input_folder"]
-    batch_input_file = config["batch_input_file"]
-    batch_output_file = config["batch_output_file"]
-    output_folder = config["output_folder"]
-    pydantic_schema_path = config[
-        "pydantic_schema_path"
-    ]  # Ensures default schema setup
-
-    structured_output_enabled = config[
-        "structured_output_enabled"
-    ]  # Flag for enabling structured output
-    schema_class_name = config["schema_class_name"]
-
-    # Default parameters
-    model = config["model"]
-    system_prompt = config["system_prompt"]
-    user_prompt = config["user_prompt"]
-    url = config["url"]
-    max_tokens = config["max_tokens"]  # Default max_tokens value
-
     while True:
         clear_screen()  # Clears terminal screen before showing the menu
+
+        # Default paths and parameters
+        config = load_config()  # Load persisted config
+
+        input_folder = config["input_folder"]
+        batch_input_file = config["batch_input_file"]
+        batch_output_file = config["batch_output_file"]
+        output_folder = config["output_folder"]
+        pydantic_schema_path = config[
+            "pydantic_schema_path"
+        ]  # Ensures default schema setup
+
+        structured_output_enabled = config[
+            "structured_output_enabled"
+        ]  # Flag for enabling structured output
+        schema_class_name = config["schema_class_name"]
+
+        # Default parameters
+        model = config["model"]
+        system_prompt = config["system_prompt"]
+        user_prompt = config["user_prompt"]
+        url = config["url"]
+        max_tokens = config["max_tokens"]  # Default max_tokens value
+
         # Display the menu options
         GREEN_BOLD = "\033[1;32m"
         RESET = "\033[0m"
+
+        dep_name = "openai"
+        version = get_dependency_version(dep_name)
+        
         print(
             rf"""
 ······················································································
@@ -1183,7 +1189,7 @@ def main_menu():
 :               |  __/| | | (_) | (_|  __/\__ \__ \ | | | | (_| |                    :
 :               |_|   |_|  \___/ \___\___||___/___/_|_| |_|\__, |                    :
 :                                                          |___/                     :
-        ---------------  Based on OpenAI API {GREEN_BOLD}v1.58.1{RESET}  ---------------------            
+        ---------------  Based on OpenAI API {GREEN_BOLD}v{version}{RESET}  ---------------------            
                         
             """
         )
