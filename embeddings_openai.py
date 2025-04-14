@@ -18,7 +18,6 @@ from textwrap import wrap
 from tqdm import tqdm
 import re
 from collections import defaultdict
-import tomllib
 
 # Global ChromaDB Client
 chromadb_client = (
@@ -453,6 +452,25 @@ def save_responses_as_json(
         output_filename = f"{base_name}.{default_mode}.json"  # Reflect mode in filename
         os.makedirs(output_folder, exist_ok=True)
 
+        # Load chunked input texts from batch_input_file (from config)
+        input_text_map = {}
+        batch_input_path = config.get("batch_input_file")
+        if os.path.exists(batch_input_path):
+            with open(batch_input_path, "r", encoding="utf-8") as batch_in:
+                for line in batch_in:
+                    try:
+                        data = json.loads(line)
+                        cid = data.get("custom_id")
+                        input_text = data.get("body", {}).get("input", "")
+                        if cid and input_text:
+                            input_text_map[cid] = input_text
+                    except Exception as e:
+                        logging.warning(
+                            f"Skipping batch input line due to parse error: {e}"
+                        )
+        else:
+            logging.warning(f"Batch input file not found at: {batch_input_path}")
+
         # Temporary store (we'll finalize after determining mode)
         raw_entries = []
 
@@ -489,15 +507,51 @@ def save_responses_as_json(
 
         # Final data structure
         if embedding_mode == "chunked":
-            extracted = {
-                "_embedding_mode": "chunked",
-                "data": {
-                    entry["custom_id"]: {
-                        k: v for k, v in entry.items() if k != "custom_id"
+            extracted = {"_embedding_mode": "chunked", "data": []}
+
+            for entry in raw_entries:
+                custom_id = entry["custom_id"]
+
+                # Attempt to read source document (if available)
+                # try:
+                #     input_file = os.path.join(input_folder, f"{extract_base_id(custom_id)}.md")
+                #     with open(input_file, "r", encoding="utf-8") as f:
+                #         markdown_text = f.read()
+                # except Exception:
+                #     markdown_text = ""
+                # Attempt to extract chunk text from markdown (if needed)
+                # Optionally, you could extract a specific chunk if it was pre-split
+                #
+                # Use original chunk input text from batch input instead of full Markdown file...ffs smh
+                markdown_text = input_text_map.get(custom_id, "")
+
+                # Detect chunk and parent IDs
+                chunk_index = (
+                    int(re.search(r"_chunk_(\d+)$", custom_id).group(1))
+                    if "_chunk_" in custom_id
+                    else 0
+                )
+                parent_id = re.sub(r"_chunk_\d+$", "", custom_id)
+
+                # Compose the metadata
+                metadata = {
+                    "parent_id": parent_id,
+                    "chunk_index": chunk_index,
+                    "embedding_mode": "chunked",
+                    "model": entry.get("model", "unknown"),
+                    "token_count": entry.get("usage", {}).get("total_tokens", 0),
+                    "source_file": f"{base_name}.md",
+                }
+
+                # Final embedding record
+                extracted["data"].append(
+                    {
+                        "custom_id": custom_id,
+                        "embedding": entry["embedding"],
+                        "documents": markdown_text,  # or slice if chunk-specific
+                        "metadata": metadata,
                     }
-                    for entry in raw_entries
-                },
-            }
+                )
         else:
             extracted = {"_embedding_mode": "full", "data": raw_entries}
 
@@ -1661,19 +1715,18 @@ def list_available_embedding_files(output_path="./data/vectors", per_page=5):
     collection = get_or_create_collection(client, collection_name)
 
     # Get loaded source_file paths from ChromaDB collection metadata
+    loaded_ids = set()
     try:
-        results = collection.get(include=["metadatas"])
-        loaded_paths = set(
-            meta.get("source_file")
-            for meta in results.get("metadatas", [])
-            if "source_file" in meta
-        )
-        normalized_loaded_paths = {
-            os.path.abspath(os.path.normpath(p)) for p in loaded_paths
-        }
+        for filename in files:
+            path = os.path.abspath(os.path.join(output_folder, filename))
+            file_custom_ids = extract_custom_ids(path)
+            if not file_custom_ids:
+                continue
+            results = collection.get(ids=file_custom_ids)
+            if results.get("ids"):
+                loaded_ids.add(path)
     except Exception as e:
-        logging.error(f"Failed to fetch metadata from ChromaDB: {e}")
-        normalized_loaded_paths = set()
+        logging.error(f"Failed to determine loaded IDs from ChromaDB: {e}")
 
     file_data = []
     for filename in files:
@@ -1704,9 +1757,7 @@ def list_available_embedding_files(output_path="./data/vectors", per_page=5):
             size_kb = 0
             created_str = "Unknown"
 
-        is_loaded = (
-            os.path.abspath(os.path.normpath(full_path)) in normalized_loaded_paths
-        )
+        is_loaded = full_path in loaded_ids
 
         file_data.append(
             {
@@ -1958,6 +2009,25 @@ def detect_group_id(custom_id):
     return re.sub(r"_page_\d+$", "", base)
 
 
+def extract_custom_ids(path):
+    """
+    Extracts all custom_id values from a given embedding JSON file.
+    Supports both full and chunked modes.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mode = data.get("_embedding_mode", "full")
+        entries = data.get("data", [])
+        if isinstance(entries, dict):  # legacy dict format
+            return list(entries.keys())
+        elif isinstance(entries, list):
+            return [entry["custom_id"] for entry in entries if "custom_id" in entry]
+    except Exception as e:
+        logging.warning(f"Failed to extract custom_ids from {path}: {e}")
+    return []
+
+
 def load_embeddings_into_chromadb(
     file_path,
     collection,
@@ -2022,28 +2092,45 @@ def load_embeddings_into_chromadb(
         all_entries = []
 
         # Generator depending on mode
-        if embedding_mode == "chunked":
-            embedding_items = embedding_data.items()  # custom_id, item
+        # Normalize to a list of (custom_id, item) for both modes
+        if isinstance(embedding_data, dict):  # legacy chunked format
+            embedding_items = embedding_data.items()
+        elif isinstance(embedding_data, list):  # modern format
+            embedding_items = (
+                (item.get("custom_id", "unknown_id"), item) for item in embedding_data
+            )
         else:
-            embedding_items = ((item["custom_id"], item) for item in embedding_data)
+            raise ValueError(
+                f"Unsupported embedding data format. Got: {type(embedding_data)}"
+            )
 
         for custom_id, item in embedding_items:
             try:
                 embedding = item["embedding"]
 
                 # Try to load associated markdown document
-                md_file = os.path.join(input_folder, custom_id + ".md")
-                document_text = ""
-                if os.path.exists(md_file):
-                    with open(md_file, "r", encoding="utf-8") as md:
-                        document_text = md.read()
+                # Prefer inline `documents`, fallback to loading from markdown file (for full-mode entries)
+                document_text = item.get("documents")
+                if document_text is None:
+                    md_file = os.path.join(input_folder, f"{custom_id}.md")
+                    if os.path.exists(md_file):
+                        with open(md_file, "r", encoding="utf-8") as f:
+                            document_text = f.read()
+                    else:
+                        document_text = ""
+                        logging.debug(
+                            f"[DEBUG] No inline or file-based document for ID: {custom_id}"
+                        )
 
-                base_metadata = {
-                    "model": item.get("model", "unknown"),
-                    "token_count": item.get("usage", {}).get("total_tokens", 0),
-                    "source_file": file_path,
-                    "embedding_mode": embedding_mode,
-                }
+                if "metadata" in item:
+                    base_metadata = item["metadata"]
+                else:
+                    base_metadata = {
+                        "embedding_mode": embedding_mode,
+                        "source_file": file_path,
+                        "token_count": item.get("usage", {}).get("total_tokens", 0),
+                        "model": item.get("model", "unknown"),
+                    }
                 total_tokens += base_metadata["token_count"]
 
                 # Prepare entries - Not using the function chunk_and_prepare_embedding_entries() because we would be make many tqdms instead of one and inline
@@ -2224,6 +2311,15 @@ def load_embeddings_into_chromadb_ui(client, config):
 
     # Gather metadata
     file_data = []
+
+    # Fetch loaded custom_ids from ChromaDB
+    try:
+        collection = get_or_create_collection(client, collection_name)
+        loaded_ids = set(collection.get()["ids"])
+    except Exception as e:
+        logging.error(f"Failed to fetch loaded ids from ChromaDB: {e}")
+        loaded_ids = set()
+
     for filename in embedding_files:
         path = os.path.join(output_folder, filename)
         try:
@@ -2268,7 +2364,9 @@ def load_embeddings_into_chromadb_ui(client, config):
                 "size_kb": size_kb,
                 "created": created_str,
                 "path": normalized_path,
-                "loaded": normalized_path in loaded_paths,
+                "loaded": any(
+                    cid in loaded_ids for cid in extract_custom_ids(normalized_path)
+                ),
                 "embedding_mode": embedding_mode,
             }
         )
@@ -2399,7 +2497,9 @@ def load_embeddings_into_chromadb_ui(client, config):
             elif mode_filter == "3":
                 pass
             else:
-                print("\033[33mInvalid mode filter. Showing all embedding modes.\033[0m")
+                print(
+                    "\033[33mInvalid mode filter. Showing all embedding modes.\033[0m"
+                )
 
             current_data = filtered
             page = 1
@@ -2436,15 +2536,23 @@ def load_embeddings_into_chromadb_ui(client, config):
             current_overlap = config.get("chunk_overlap", 7)
 
             print("\n\033[1mConfigure Chunking Parameters\033[0m")
-            print("\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m")
-            print("\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m")
+            print(
+                "\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m"
+            )
+            print(
+                "\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m"
+            )
             print(f"\nCurrent chunk size: \033[36m{current_chunk_size}\033[0m")
             print(f"Current overlap: \033[36m{current_overlap}\033[0m")
             print("Press Enter to keep current values.")
 
             try:
-                new_size = input("Enter new chunk size (number of words per chunk): ").strip()
-                new_overlap = input("Enter new overlap (number of overlapping words): ").strip()
+                new_size = input(
+                    "Enter new chunk size (number of words per chunk): "
+                ).strip()
+                new_overlap = input(
+                    "Enter new overlap (number of overlapping words): "
+                ).strip()
 
                 updated = False
 
@@ -2493,7 +2601,9 @@ def load_embeddings_into_chromadb_ui(client, config):
                             if isinstance(data, dict):
                                 embedding_mode = data.get("_embedding_mode", "unknown")
                     except Exception as e:
-                        logging.warning(f"Could not detect embedding_mode from file: {selected_path} - {e}")
+                        logging.warning(
+                            f"Could not detect embedding_mode from file: {selected_path} - {e}"
+                        )
 
                     try:
                         collection = get_or_create_collection(client, collection_name)
@@ -2512,7 +2622,10 @@ def load_embeddings_into_chromadb_ui(client, config):
                             )
                             loaded_paths = set()
 
-                        if selected_path in loaded_paths:
+                        if (
+                            os.path.normpath(os.path.abspath(selected_path))
+                            in loaded_paths
+                        ):
                             print(
                                 f"\n\033[33mWarning:\033[0m This file is already loaded in ChromaDB."
                             )
@@ -2527,31 +2640,60 @@ def load_embeddings_into_chromadb_ui(client, config):
                                 continue  # Return to the menu without reloading
 
                         # Ask whether to enable chunking before loading
-                        print("\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m")
-                        print("\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m\n")
+                        print(
+                            "\033[33mNote:\033[0m \033[1mChunking is based on words, not characters or tokens.\033[0m"
+                        )
+                        print(
+                            "\033[1mFor example, a chunk size of 200 means ~200 words per chunk.\033[0m\n"
+                        )
                         if embedding_mode == "chunked":
-                            print("\033[93mNote:\033[0m This file already contains per-chunk embeddings.")
-                            print("Document chunking is disabled to avoid redundant splitting.\n")
+                            print(
+                                "\033[93mNote:\033[0m This file already contains per-chunk embeddings."
+                            )
+                            print(
+                                "Document chunking is disabled to avoid redundant splitting.\n"
+                            )
                             use_chunking = False
                         else:
-                            print("\nDo you want to enable chunking of document text before loading?")
-                            chunk_input = input("Enable chunking? (yes/no) [default: yes]: ").strip().lower()
-                            use_chunking = chunk_input != "no"
-                            # use_chunking = chunk_input == "yes"
+                            print(
+                                "\n\033[1mChunking Info:\033[0m\n"
+                                "You are about to apply \033[33mchunking\033[0m to documents that were embedded as full pages.\n"
+                                "This means each embedding represents an entire page, not individual chunks.\n"
+                                "\n\033[33mWarning:\033[0m Chunking at this stage will \033[1mnot\033[0m improve semantic search.\n"
+                                "It will only split the already-embedded text into arbitrary pieces —\n"
+                                "this is called \033[36mstructural chunking\033[0m and can lead to misleading results.\n"
+                                "\n\033[1mRecommendation:\033[0m Use this only if you know what you're doing.\n"
+                            )
+                            print(
+                                "\nDo you want to enable chunking of document text before loading?\n "
+                            )
+                            chunk_input = (
+                                input("Enable chunking? (yes/no) [default: no]: ")
+                                .strip()
+                                .lower()
+                            )
+                            # use_chunking = chunk_input != "no"
+                            use_chunking = chunk_input == "yes"
 
                         chunk_size = 15
                         overlap = 7
 
                         if use_chunking:
                             try:
-                                chunk_size_input = input("Enter chunk size (words per chunk) [default: 15]: ").strip()
+                                chunk_size_input = input(
+                                    "Enter chunk size (words per chunk) [default: 15]: "
+                                ).strip()
                                 if chunk_size_input.isdigit():
                                     chunk_size = int(chunk_size_input)
-                                overlap_input = input("Enter chunk overlap [default: 7]: ").strip()
+                                overlap_input = input(
+                                    "Enter chunk overlap [default: 7]: "
+                                ).strip()
                                 if overlap_input.isdigit():
                                     overlap = int(overlap_input)
                             except Exception as e:
-                                print(f"\033[33mWarning:\033[0m Invalid chunking input. Using defaults (chunk_size=15, overlap=7)")
+                                print(
+                                    f"\033[33mWarning:\033[0m Invalid chunking input. Using defaults (chunk_size=15, overlap=7)"
+                                )
 
                         # Prompt user for batch insertion
                         print("\nWould you like to use batch insertion?")
@@ -2568,7 +2710,9 @@ def load_embeddings_into_chromadb_ui(client, config):
                             print("\n\033[94mBatch Size Guide:\033[0m")
                             print("  • Recommended range: \033[96m100–500\033[0m")
                             print("  • Small batches (<50) may slow down insertion")
-                            print("  • Huge batches (>1000) may cause memory or timeout issues\n")
+                            print(
+                                "  • Huge batches (>1000) may cause memory or timeout issues\n"
+                            )
                             size_input = input(
                                 "Enter batch size (default: 100): "
                             ).strip()
@@ -2620,7 +2764,10 @@ def view_embedding_metadata():
     collection_name = config.get("chromadb_collection_name", "")
     try:
         collection = get_or_create_collection(client, collection_name)
-        results = collection.get(include=["metadatas", "documents"])
+        # Explicitly fetch all results to avoid pagination issues
+        results = collection.get(
+            include=["metadatas", "documents"], limit=collection.count()
+        )
         metadatas = results.get("metadatas", [])
         documents = results.get("documents", [])
         ids = results.get("ids", [])
@@ -2636,7 +2783,7 @@ def view_embedding_metadata():
     grouped = defaultdict(list)
 
     # Track the embedding mode (full/chunked) per group
-    group_modes = {}
+    group_modes = defaultdict(set)  # ← Change to store multiple modes per group
 
     for i, meta in enumerate(metadatas):
         full_id = ids[i]
@@ -2648,21 +2795,31 @@ def view_embedding_metadata():
         group_id = detect_group_id(full_id)
 
         # Store metadata for each entry in its corresponding group
-        grouped[group_id].append(
-            {
-                "custom_id": full_id,
-                "model": meta.get("model", "unknown"),
-                "token_count": meta.get("token_count", 0),
-                "source_file": meta.get("source_file", "N/A"),
-                "document": documents[i] if i < len(documents) else "",
-                "metadata": meta,
-            }
-        )
+        entry = {
+            "custom_id": full_id,
+            "model": meta.get("metadata", {}).get(
+                "model", meta.get("model", "unknown")
+            ),
+            "token_count": meta.get("metadata", {}).get(
+                "token_count", meta.get("token_count", 0)
+            ),
+            "source_file": meta.get("metadata", {}).get(
+                "source_file", meta.get("source_file", "N/A")
+            ),
+            "document": documents[i] if i < len(documents) else "",
+            "metadata": meta,  # store whole thing still`
+        }
+        grouped[group_id].append(entry)
+
+        # DEBUG: Check document content
+        if not entry["document"].strip():
+            print(f"\033[33m[DEBUG] Empty document for ID:\033[0m {full_id}")
 
         # Determine group-level embedding mode
         # If any entry in the group is chunked, mark the whole group as 'chunked'
-        if group_id not in group_modes or embedding_mode == "chunked":
-            group_modes[group_id] = embedding_mode
+        group_modes[group_id].add(
+            embedding_mode
+        )  # ← Track all modes seen for this group
 
     # Ask user to select a group
     group_keys = sorted(grouped.keys())
@@ -2681,10 +2838,22 @@ def view_embedding_metadata():
             filtered_group_keys = group_keys
             break
         elif mode_filter == "1":
-            filtered_group_keys = [g for g in group_keys if group_modes.get(g) == "chunked"]
+            # Only groups that contain exclusively chunked embeddings
+            filtered_group_keys = [
+                g for g in group_keys if group_modes.get(g) == {"chunked"}
+            ]
             break
         elif mode_filter == "2":
-            filtered_group_keys = [g for g in group_keys if group_modes.get(g) == "full"]
+            # Only groups that contain exclusively full embeddings
+            filtered_group_keys = [
+                g for g in group_keys if group_modes.get(g) == {"full"}
+            ]
+            break
+        elif mode_filter == "4":
+            # Optional future mode: Only groups that contain both
+            filtered_group_keys = [
+                g for g in group_keys if group_modes.get(g) == {"full", "chunked"}
+            ]
             break
         else:
             print("Invalid input. Please enter 1, 2, 3, or press Enter.")
@@ -2696,10 +2865,23 @@ def view_embedding_metadata():
         )
         print("=" * 80)
         for idx, key in enumerate(filtered_group_keys, start=1):
-            # Display the group name, number of embeddings, and its embedding mode
-            mode = group_modes.get(key, "unknown").upper()
-            mode_color = "\033[36m" if mode == "CHUNKED" else "\033[35m" if mode == "FULL" else "\033[90m"
-            print(f"{idx:>3}. {key:<35} ({len(grouped[key])} embeddings) {mode_color}[{mode}]\033[0m")
+            # Get all embedding modes for the group (e.g., {"chunked", "full"})
+            modes = group_modes.get(key, {"unknown"})
+            mode_label = " + ".join(sorted(m.upper() for m in modes))
+
+            # Determine display color: mixed = cyan + magenta
+            if modes == {"chunked"}:
+                mode_color = "\033[36m"  # Cyan
+            elif modes == {"full"}:
+                mode_color = "\033[35m"  # Magenta
+            elif "chunked" in modes and "full" in modes:
+                mode_color = "\033[95m"  # Bright purple for mixed
+            else:
+                mode_color = "\033[90m"  # Gray for unknown/other
+
+            print(
+                f"{idx:>3}. {key:<35} ({len(grouped[key])} embeddings) {mode_color}[{mode_label}]\033[0m"
+            )
         print("=" * 80)
         choice = input("\nSelect a group by number (or 'q' to quit): ").strip().lower()
         if choice == "q":
@@ -2726,12 +2908,8 @@ def view_embedding_metadata():
     show_analytics = False
 
     if is_chunked:
-        indices = sorted(
-            [entry["metadata"].get("chunk_index", 0) for entry in entries]
-        )
-        parent_ids = {
-            entry["metadata"].get("parent_id", "N/A") for entry in entries
-        }
+        indices = sorted([entry["metadata"].get("chunk_index", 0) for entry in entries])
+        parent_ids = {entry["metadata"].get("parent_id", "N/A") for entry in entries}
         parent_str = ", ".join(sorted(parent_ids))
 
         print("\n\033[1mThis group contains chunked entries:\033[0m")
@@ -2750,7 +2928,9 @@ def view_embedding_metadata():
         mode_width = 10
         file_width = 38
         buffer = 4
-        total_width = id_width + model_width + token_width + mode_width + file_width + buffer + 10
+        total_width = (
+            id_width + model_width + token_width + mode_width + file_width + buffer + 10
+        )
 
         # Header
         print(f"\n\033[1mMetadata for Group: {selected_group}\033[0m")
@@ -2785,11 +2965,15 @@ def view_embedding_metadata():
             for line_idx in range(max_lines):
                 row_id = f"{i:<4}" if line_idx == 0 else "    "
                 id_str = wrapped_id[line_idx] if line_idx < len(wrapped_id) else ""
-                file_str = wrapped_file[line_idx] if line_idx < len(wrapped_file) else ""
+                file_str = (
+                    wrapped_file[line_idx] if line_idx < len(wrapped_file) else ""
+                )
 
                 model_str = model if line_idx == 0 else ""
                 token_str = str(tokens) if line_idx == 0 else ""
-                mode_cell = mode_str if line_idx == 0 else ""  # Only show mode on first line
+                mode_cell = (
+                    mode_str if line_idx == 0 else ""
+                )  # Only show mode on first line
 
                 print(
                     f"{row_id}{id_str:<{id_width}} {model_str:<{model_width}} {token_str:<{token_width}} {mode_cell:<{mode_width}} {file_str}"
@@ -2912,9 +3096,18 @@ def view_embedding_metadata():
             if max_tokens.isdigit():
                 filtered = [e for e in filtered if e["token_count"] <= int(max_tokens)]
             if chunk_filter.isdigit():
-                filtered = [e for e in filtered if e["metadata"].get("chunk_index") == int(chunk_filter)]
+                filtered = [
+                    e
+                    for e in filtered
+                    if e["metadata"].get("chunk_index") == int(chunk_filter)
+                ]
             if mode_filter in ["full", "chunked", "unknown"]:
-                filtered = [e for e in filtered if e["metadata"].get("embedding_mode", "unknown").lower() == mode_filter]
+                filtered = [
+                    e
+                    for e in filtered
+                    if e["metadata"].get("embedding_mode", "unknown").lower()
+                    == mode_filter
+                ]
 
             current_data = filtered
             page = 1
@@ -2963,9 +3156,11 @@ def view_embedding_metadata():
                     key=lambda x: (
                         x["metadata"].get("chunk_index", 0)
                         if key == "chunk_index"
-                        else x["metadata"].get("embedding_mode", "unknown").lower()
-                        if key == "embedding_mode"
-                        else (x[key].lower() if isinstance(x[key], str) else x[key])
+                        else (
+                            x["metadata"].get("embedding_mode", "unknown").lower()
+                            if key == "embedding_mode"
+                            else (x[key].lower() if isinstance(x[key], str) else x[key])
+                        )
                     ),
                     reverse=reverse,
                 )
@@ -3452,10 +3647,6 @@ def display_instruction_manual():
     print(instruction_text)
 
 
-def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
-
-
 # TODO - Implement it to menu option logic!!
 def prompt_with_exit(prompt_text, valid_inputs=None, allow_empty=False):
     """
@@ -3484,7 +3675,7 @@ def prompt_with_exit(prompt_text, valid_inputs=None, allow_empty=False):
         print(
             "Invalid input. Try again or type 'q', 'exit', or 'back' to return to the main menu."
         )
-        
+
 
 # Main Menu
 def main_menu():
@@ -3494,12 +3685,12 @@ def main_menu():
     while True:
         # Default paths and parameters
         config = load_config()  # Load persisted config
-        
+
         # Show embedding mode and chunk config if applicable
         embedding_mode = config.get("embedding_mode", "full")
         chunk_size = config.get("chunk_size", 200)
         chunk_overlap = config.get("chunk_overlap", 50)
-        
+
         input_folder = config["input_folder"]
         batch_input_file = config["batch_input_file"]
         batch_output_file = config["batch_output_file"]
@@ -3552,7 +3743,7 @@ def main_menu():
             if chromadb_status == "Active"
             else f"{RED}Inactive{RESET}"
         )
-        
+
         dep_name = "openai"
         version = get_dependency_version(dep_name)
 
@@ -3859,8 +4050,12 @@ def main_menu():
                 print("\n\033[1mCreate Batch Input File (.jsonl)\033[0m")
 
                 # Show current default embedding mode from config
-                default_mode = config.get("embedding_mode", "full")  # either "full" or "chunked"
-                print(f"\nCurrent default embedding mode: \033[36m{default_mode.upper()}\033[0m")
+                default_mode = config.get(
+                    "embedding_mode", "full"
+                )  # either "full" or "chunked"
+                print(
+                    f"\nCurrent default embedding mode: \033[36m{default_mode.upper()}\033[0m"
+                )
 
                 # Ask if the user wants to override the mode just for this run
                 print("Choose embedding mode for this run:")
@@ -3888,22 +4083,34 @@ def main_menu():
                     print(f"Current overlap: \033[36m{default_overlap}\033[0m")
 
                     try:
-                        chunk_size_input = input("Enter chunk size (words per chunk): ").strip()
+                        chunk_size_input = input(
+                            "Enter chunk size (words per chunk): "
+                        ).strip()
                         overlap_input = input("Enter overlap (words): ").strip()
 
-                        chunk_size = int(chunk_size_input) if chunk_size_input.isdigit() else default_chunk_size
-                        overlap = int(overlap_input) if overlap_input.isdigit() else default_overlap
+                        chunk_size = (
+                            int(chunk_size_input)
+                            if chunk_size_input.isdigit()
+                            else default_chunk_size
+                        )
+                        overlap = (
+                            int(overlap_input)
+                            if overlap_input.isdigit()
+                            else default_overlap
+                        )
                     except Exception as e:
-                        print(f"\033[33mInvalid input. Using default chunk size and overlap.\033[0m")
+                        print(
+                            f"\033[33mInvalid input. Using default chunk size and overlap.\033[0m"
+                        )
                         chunk_size = default_chunk_size
                         overlap = default_overlap
-                    
+
                     # Save the selected mode and chunk config
-                    config["embedding_mode"] = "chunked"                          
-                    config["chunk_size"] = chunk_size                             
-                    config["chunk_overlap"] = overlap                  
-                    save_config(config)        
-                    
+                    config["embedding_mode"] = "chunked"
+                    config["chunk_size"] = chunk_size
+                    config["chunk_overlap"] = overlap
+                    save_config(config)
+
                     # Call function for chunked embedding mode
                     create_batch_input_jsonl(
                         input_folder=input_folder,
@@ -3920,8 +4127,8 @@ def main_menu():
                 else:
                     # Save full mode to config
                     config["embedding_mode"] = "full"
-                    save_config(config)            
-                    
+                    save_config(config)
+
                     # Call function for full-document embedding
                     create_batch_input_jsonl(
                         input_folder=input_folder,
