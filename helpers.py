@@ -39,3 +39,8 @@ def get_dependency_version(dep_name, file_path="pyproject.toml") -> str | None:
     except Exception as e:
         print(f"Error: {e}")
         return None
+
+
+# ANSI escape codes for custom RGB foreground colors (truecolor terminals)
+def rgb(r, g, b):
+    return f"\033[38;2;{r};{g};{b}m"
