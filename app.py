@@ -23,8 +23,10 @@ from weather import weather_keywords, detect_tense_simple
 from llama_index.tools.weather import OpenWeatherMapToolSpec
 
 from textwrap import shorten
-from collections import defaultdict
+from collections import defaultdict, Counter
 import re
+import json
+import asyncio
 
 # API KEYS
 ENABLE_USER_ENV = os.getenv("ENABLE_USER_ENV", "false").lower() == "true"
@@ -32,26 +34,89 @@ OPENAI_TOKEN: Optional[str] = os.getenv("OPENAI_API_KEY")
 HF_TOKEN: Optional[str] = os.getenv("HUGGING_FACE_TOKEN")
 OPENWEATHER_TOKEN: Optional[str] = os.getenv("OPENWEATHER_API_KEY")
 
+TOP_K_RESULTS = int(os.getenv("TOP_K_RETRIEVAL_RESULTS", 5))
+
+# Decoupled Retrieval & Synthesis Configuration
+ENABLE_DECOUPLED_SYNTHESIS = (
+    os.getenv("ENABLE_DECOUPLED_SYNTHESIS", "false").lower() == "true"
+)
+CHUNK_GROUP_FIELD = os.getenv("CHUNK_GROUP_FIELD", "parent_id")
+CHUNK_SYNTHESIS_MIN = int(os.getenv("CHUNK_SYNTHESIS_MIN", 1))
+CHUNK_SYNTHESIS_MAX = int(os.getenv("CHUNK_SYNTHESIS_MAX", 6))
+CHUNK_SYNTHESIS_ORDERED = os.getenv("CHUNK_SYNTHESIS_ORDERED", "true").lower() == "true"
+
+
+def load_embedding_config(config_path="./embeddings_openai_persistence.json"):
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            model = cfg.get("model", "text-embedding-3-small")
+            dimensions = cfg.get("dimensions")
+            use_dimensions = cfg.get("use_dimensions", False)
+            return model, dimensions if use_dimensions else None
+    except Exception as e:
+        print(f"\033[91m[ERROR]\033[0m Failed to load config.json: {e}")
+        return "text-embedding-3-small", None
+
 
 # Set default LLM and embedding model
 llm = OpenAI(model="gpt-4o", temperature=0.0)
-embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+
+model_name, custom_dims = load_embedding_config()
+embed_model = OpenAIEmbedding(
+    model=model_name,
+    dimensions=custom_dims,
+)
 
 Settings.llm = llm
 Settings.embed_model = embed_model
 
+
+def load_last_chroma_collection_config(
+    config_path="./embeddings_openai_persistence.json",
+):
+    """
+    Loads the last used ChromaDB collection and persistence path from the CLI config file.
+
+    Args:
+        config_path (str): Path to the CLI config file of Embeddings using OpenAI API utility (default: embeddings_openai_persistence.json)
+
+    Returns:
+        dict: {
+            "chromadb_collection_name": str or None,
+            "chromadb_persistence_path": str
+        }
+    """
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return {
+            "chromadb_collection_name": config.get("chromadb_collection_name"),
+            "chromadb_persistence_path": config.get("chromadb_persistence_path", "./data/chromadb"),
+        }
+    except Exception as e:
+        print(f"\033[91m[ERROR]\033[0m Failed to load CLI config: {e}")
+        return {}
+
+
 # Path and collection for ChromaDB
-CHROMA_PATH = "./data/chromadb"
-CHROMA_COLLECTION = "MarineEngineeringManuals"
+cli_chroma_config = load_last_chroma_collection_config()
+CHROMA_PATH = cli_chroma_config.get("chromadb_persistence_path", "./data/chromadb")
+CHROMA_COLLECTION = cli_chroma_config.get(
+    "chromadb_collection_name", "MarineEngineeringManuals"
+)
 
 
 # Connect to ChromaDB and load pre-generated index
 def load_chromadb_index():
     print("\033[94m[INFO]\033[0m Connecting to ChromaDB...")
 
+    # Load embedding model + dimension config
+    model_name, expected_dimensions = load_embedding_config()
+
     client = PersistentClient(
         path=CHROMA_PATH,
-        settings=ChromaSettings(anonymized_telemetry=False),  # Disable telemetry
+        settings=ChromaSettings(anonymized_telemetry=False),
     )
 
     collections = client.list_collections()
@@ -61,49 +126,133 @@ def load_chromadb_index():
         )
 
     chroma_collection = client.get_collection(name=CHROMA_COLLECTION)
-    doc_ids = chroma_collection.get()["ids"]
+    result = chroma_collection.get()
+    doc_ids = result["ids"]
+    doc_metadatas = result.get("metadatas", [])
+    doc_texts = result.get("documents", [])
     doc_count = len(doc_ids)
 
-    print(f"\033[92m[SUCCESS]\033[0m Connected to collection: '{CHROMA_COLLECTION}'")
+    # Check dimensionality mismatch
+    if expected_dimensions:
+        actual_dim = chroma_collection.metadata.get("dimension")
+        if actual_dim and actual_dim != expected_dimensions:
+            print(
+                f"\033[93m[WARNING]\033[0m Embedding dimension mismatch: "
+                f"ChromaDB = {actual_dim}, Config = {expected_dimensions}\n"
+            )
+
+    # Check for duplicate custom_ids
+    duplicates = [item for item, count in Counter(doc_ids).items() if count > 1]
+    if duplicates:
+        print(
+            f"\033[93m[WARNING]\033[0m Duplicate custom_id(s) found: "
+            f"{', '.join(duplicates[:5])}{'...' if len(duplicates) > 5 else ''}\n"
+        )
+
+    # Check for missing or incomplete metadata
+    missing_meta = 0
+    for md in doc_metadatas:
+        if not md or not isinstance(md, dict):
+            missing_meta += 1
+        elif not all(key in md for key in ["embedding_mode", "model"]):
+            missing_meta += 1
+    if missing_meta > 0:
+        print(
+            f"\033[93m[WARNING]\033[0m {missing_meta} entries have missing or incomplete metadata.\n"
+        )
+
+    # Check for all document fields empty
+    empty_doc_count = sum(1 for doc in doc_texts if not doc or not doc.strip())
+    warning_flag = empty_doc_count == len(doc_texts) and doc_count > 0
+
+    # --- Group Overview ---
+    print(
+        f"\033[92m[SUCCESS]\033[0m Connected to collection: '{CHROMA_COLLECTION}'"
+        + (" \033[91m[!]\033[0m" if warning_flag else "")
+    )
     print(f"\033[90m ├── Documents loaded:\033[0m {doc_count}")
 
-    # --- Customizable Preview Settings ---
+    # Group and print preview
     show_group_preview = os.getenv("GROUP_PREVIEW_ENABLED", "true").lower() == "true"
     group_preview_limit = int(os.getenv("GROUP_PREVIEW_LIMIT", 5))
 
     if show_group_preview:
-        # Group based on ID prefix (e.g. 'MF-200_page_3' -> 'MF-200')
-        page_pattern = re.compile(r"^(.*)_page_\d+$")
-        grouped = defaultdict(list)
-        for doc_id in doc_ids:
-            match = page_pattern.match(doc_id)
-            base_id = match.group(1) if match else doc_id
-            grouped[base_id].append(doc_id)
+        group_stats = defaultdict(
+            lambda: {"pages": set(), "chunks": set(), "modes": set()}
+        )
+        orphaned_chunks = set()
+        all_ids_set = set(doc_ids)
 
-        print(f"\033[90m ├── Document Groups:\033[0m {len(grouped)}")
-        for group, entries in sorted(grouped.items())[:group_preview_limit]:
-            print(f"     ├─ {group}  ({len(entries)} pages)")
-        if len(grouped) > group_preview_limit:
-            print(f"     └─ ...and {len(grouped) - group_preview_limit} more groups.")
+        for idx, doc_id in enumerate(doc_ids):
+            metadata = doc_metadatas[idx] if idx < len(doc_metadatas) else {}
+
+            match = re.match(r"^(.*)_page_(\d+)(?:_chunk_(\d+))?$", doc_id)
+            if match:
+                group_id = match.group(1)
+                page_id = f"{group_id}_page_{match.group(2)}"
+                is_chunk = match.group(3) is not None
+            else:
+                group_id = doc_id.split("_page_")[0]
+                page_id = doc_id
+                is_chunk = "_chunk_" in doc_id
+
+            embedding_mode = metadata.get("embedding_mode", "unknown")
+            parent_id = metadata.get("parent_id")
+
+            if is_chunk:
+                group_stats[group_id]["chunks"].add(doc_id)
+                group_stats[group_id]["pages"].add(page_id)
+                group_stats[group_id]["modes"].add("chunked")
+
+                # Check if parent exists only in mixed mode
+                if "full" in group_stats[group_id]["modes"]:
+                    if parent_id and parent_id not in all_ids_set:
+                        orphaned_chunks.add(doc_id)
+            else:
+                group_stats[group_id]["pages"].add(page_id)
+                group_stats[group_id]["modes"].add("full")
+
+        print(f"\033[90m ├── Document Groups:\033[0m {len(group_stats)}")
+        for idx, (group_id, stats) in enumerate(sorted(group_stats.items())):
+            if idx >= group_preview_limit:
+                break
+            pages = len(stats["pages"])
+            chunks = len(stats["chunks"])
+            mode = "+".join(sorted(stats["modes"]))
+            print(f"     ├─ {group_id}  ({pages} pages, {chunks} chunks, mode: {mode})")
+
+        if len(group_stats) > group_preview_limit:
+            print(
+                f"     └─ ...and {len(group_stats) - group_preview_limit} more groups."
+            )
+
+        if orphaned_chunks:
+            print(
+                f"\033[93m[WARNING]\033[0m Found {len(orphaned_chunks)} orphaned chunks with missing parent_id links.\n"
+            )
 
     print(f"\033[90m └── Vector DB path:\033[0m {CHROMA_PATH}\n")
+
+    if warning_flag:
+        print(
+            "\033[93m[WARNING]\033[0m All document fields are empty strings. "
+            "You may have loaded embeddings without associated text. "
+            "Synthesis or semantic responses may be incomplete.\n"
+        )
 
     if doc_count == 0:
         print(
             "\033[93m[WARNING]\033[0m Collection is empty. Semantic queries will be skipped.\n"
         )
-        return None  # New: Return None for empty collection
+        return None
 
     vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    # Load index directly from Chroma collection
     index = VectorStoreIndex.from_vector_store(
         vector_store=vector_store, storage_context=storage_context
     )
-
     return index
-
 
 index = load_chromadb_index()
 
@@ -134,11 +283,53 @@ def log_top_k_results(nodes, k=5):
         print(f" ├─ Model: {model}")
         print(f" ├─ Tokens: {tokens}")
         print(f" ├─ File: {source_file}")
-        print(f' └─ Content Snippet: {ANSI_GRAY}"{snippet}"{ANSI_RESET}\n')
+        print(f' └─ Content Snippet: {ANSI_GRAY}"{snippet}"{ANSI_RESET}\n')   
 
+        # Debug content comparison: fallback from metadata["document"] or metadata["documents"]
+        doc_fallback = metadata.get("document") or metadata.get("documents")
+        if not getattr(node, "text", "").strip():
+            print(f" └─ Content Snippet (metadata.document): {ANSI_GRAY}[EMPTY]{ANSI_RESET}\n")
+        else:
+            doc_snippet = shorten(doc_fallback or "", width=100, placeholder="...")
+            print(f' └─ Content Snippet (metadata.document): {ANSI_GRAY}"{doc_snippet}"{ANSI_RESET}\n')
+
+
+def group_chunks_for_synthesis(
+    nodes, group_field="parent_id", min_size=1, max_size=6, ordered=True
+):
+    grouped = defaultdict(list)
+    for node in nodes:
+        group_id = node.metadata.get(group_field)
+        if group_id:
+            grouped[group_id].append(node)
+
+    synthesis_units = []
+    for group_id, chunks in grouped.items():
+        if not (min_size <= len(chunks) <= max_size):
+            continue
+        if ordered:
+            chunks.sort(key=lambda x: x.metadata.get("chunk_index", 0))
+        merged_text = "\n".join(chunk.text for chunk in chunks if chunk.text)
+        synthesis_units.append((group_id, merged_text))
+
+    return synthesis_units
+
+# This will do the false-positives for weather instead of semantic search
+def is_weather_query(text: str) -> bool:
+    threshold = int(os.getenv("WEATHER_KEYWORD_THRESHOLD", 2))
+    text = text.lower()
+    keyword_hits = [kw for kw in weather_keywords if kw in text]
+
+    print(
+        f"\033[90m[DEBUG]\033[0m Detected {len(keyword_hits)} weather keywords: {keyword_hits}"
+    )
+
+    return len(keyword_hits) >= threshold
 
 @cl.on_chat_start
 async def start():
+    print(f"\033[90m[DEBUG]\033[0m Top-K retrieval log threshold: {TOP_K_RESULTS}")
+    
     if ENABLE_USER_ENV:
         # Retrieve user-specific environment variables
         user_env = cl.user_session.get("env")
@@ -162,6 +353,13 @@ async def start():
 
     Settings.llm = llm
     Settings.embed_model = embed_model
+
+    # Check for short-term context toggle
+    enable_context = os.getenv("ENABLE_CHAT_HISTORY_CONTEXT", "false").lower() == "true"
+    cl.user_session.set("enable_chat_history", enable_context)
+
+    if enable_context:
+        cl.user_session.set("chat_history", [])  # Initialize empty list
 
     await cl.Message(
         author="MarinEnGPT",
@@ -231,8 +429,22 @@ async def skip_references(action: cl.Action):
 async def main(message: cl.Message):
     content = message.content
 
+    # Get chat history context toggle and state
+    enable_context = cl.user_session.get("enable_chat_history", False)
+    chat_history = cl.user_session.get("chat_history", [])
+
+    print(f"\033[90m[DEBUG]\033[0m Short-term context enabled: {enable_context}")
+
+    # Append user query to history if enabled
+    if enable_context:
+        print(
+            f"\033[90m[DEBUG]\033[0m Chat history turns in memory (Q + A): {len(chat_history)}"
+        )
+        chat_history.append({"role": "user", "content": content})
+        cl.user_session.set("chat_history", chat_history)
+
     # Handle Weather Queries
-    if any(keyword in content for keyword in weather_keywords):
+    if is_weather_query(content):
         await handle_weather_query(content)
         return
 
@@ -265,12 +477,21 @@ async def main(message: cl.Message):
 
     # Step 1: Retrieving relevant chunks
     async with cl.Step(name="Retrieving Chunks", type="run") as step_retrieve:
-        retriever = index.as_retriever()
+        top_k = int(os.getenv("TOP_K_RETRIEVAL_RESULTS", 5))
+        retriever = index.as_retriever(similarity_top_k=top_k)
         nodes = retriever.retrieve(content)
+
+        # Patch .text field if missing
+        for node in nodes:
+            # Check if node.text is empty or looks like a fallback
+            if not node.text.strip() or node.text.startswith("# Response for"):
+                fallback_text = node.metadata.get("document") or node.metadata.get("documents")
+                if fallback_text:
+                    node.text = fallback_text  # Patch in the real chunk content
+
+        # Now filter valid nodes
         valid_nodes = [
-            n
-            for n in nodes
-            if hasattr(n, "text") and isinstance(n.text, str) and n.text.strip()
+            n for n in nodes if hasattr(n, "text") and isinstance(n.text, str) and n.text.strip()
         ]
 
         if not valid_nodes:
@@ -283,32 +504,115 @@ async def main(message: cl.Message):
         step_retrieve.output = f"{len(valid_nodes)} chunks found."
 
     # Log top-k results
-    log_top_k_results(valid_nodes)
+    log_top_k_results(valid_nodes, k=TOP_K_RESULTS)
 
-    # Step 2: Generating Response
+    # Step 2: Generating Response with conditional features of Decoupled Retrieval & Synthesis
     async with cl.Step(name="Generating Response", type="run") as step_generate:
-        streaming_engine = index.as_query_engine(streaming=True)
         msg = cl.Message(author="MarinEnGPT", content="")
         await msg.send()
-
-        # Run query and stream response
-        response = streaming_engine.query(content)
 
         print("\n\033[96m" + "=" * 60 + "\033[0m")
         print("\033[1;94m[Query Input]\033[0m")
         print(f"{content}\n")
 
-        response_text = ""
-        for token in response.response_gen:
-            response_text += str(token)
-            await msg.stream_token(token)
+        if ENABLE_DECOUPLED_SYNTHESIS:
+            print("[INFO] Decoupled Retrieval & Synthesis is ENABLED")
+            synthesis_units = group_chunks_for_synthesis(
+                valid_nodes,
+                group_field=CHUNK_GROUP_FIELD,
+                min_size=CHUNK_SYNTHESIS_MIN,
+                max_size=CHUNK_SYNTHESIS_MAX,
+                ordered=CHUNK_SYNTHESIS_ORDERED,
+            )
 
-        print("\033[1;95m[Streamed Response Text]\033[0m")
-        print(response_text)
-        print("\033[96m" + "=" * 60 + "\033[0m\n")
+            if not synthesis_units:
+                step_generate.output = "No valid synthesis groups."
 
-        msg.content = response_text
-        await msg.update()
+                # Load last-used CLI collection info for helpful comparison
+                cli_config = load_last_chroma_collection_config()
+                last_used = cli_config.get("chromadb_collection_name")
+
+                print("\033[91m[ERROR]\033[0m No valid chunk groups found for synthesis.")
+                print("\033[90m └─ Make sure you're querying a collection with properly chunked embeddings.\033[0m")
+                if CHROMA_COLLECTION != last_used:
+                    print(f"\033[33m[HINT]\033[0m Last CLI-selected collection was: {last_used}")
+
+                await cl.Message(
+                    content=(
+                        "No valid content groups were found to generate a synthesized answer.\n"
+                        "Please check if your current collection includes chunked embeddings."
+                    )
+                ).send()
+                return
+
+            # Optionally include short-term chat history in synthesis prompt
+            context_prefix = ""
+            if enable_context and chat_history:
+                recent_turns = chat_history[-6:]  # Limit to 3 exchanges
+                formatted = [
+                    f"{turn['role'].capitalize()}: {turn['content'].strip()}"
+                    for turn in recent_turns
+                ]
+                context_prefix = "\n".join(formatted) + "\n\n"
+
+            combined_prompt = "\n\n".join(text for _, text in synthesis_units)
+
+            synthesis_prompt = f"""You are MarinEnGPT, an expert AI assistant in marine engineering systems, especially service and maintenance procedures for shipboard equipment.
+
+            {context_prefix}Use the following technical context entries — which you have already internalized — to answer the user's question clearly, concisely, and accurately.
+
+            Do not mention documents, excerpts, or sources. Only answer based on the given context. If the context lacks the information, say so directly.
+
+            User Question:
+            \"{content}\"
+
+            Context:
+            {combined_prompt}
+
+            Answer:"""
+
+            llm_response = Settings.llm.complete(synthesis_prompt)
+            response_text = llm_response.text
+
+            # Stream the response slowly for natural effect
+            for token in response_text.split():
+                await msg.stream_token(token + " ")
+                await asyncio.sleep(0.02)
+
+            msg.content = response_text
+            await msg.update()
+
+            if enable_context:
+                chat_history.append({"role": "assistant", "content": response_text})
+                cl.user_session.set("chat_history", chat_history)
+
+            step_generate.output = f"{len(synthesis_units)} group(s) synthesized."
+
+            print("\033[1;95m[Synthesized Output]\033[0m")
+            print(response_text)
+            print("\033[96m" + "=" * 60 + "\033[0m\n")
+        else:
+            print("[INFO] Decoupled Retrieval & Synthesis is DISABLED")
+
+            streaming_engine = index.as_query_engine(streaming=True)
+            response = streaming_engine.query(content)
+
+            response_text = ""
+            for token in response.response_gen:
+                response_text += str(token)
+                await msg.stream_token(token)
+                await asyncio.sleep(
+                    0.01
+                )  # Slow down streaming rate - It should stop Engineio throwing 'Too many packets in payload' error
+
+            msg.content = response_text
+            await msg.update()
+
+            step_generate.output = "Response delivered (streamed)."
+
+            print("\033[1;95m[Streamed Response Text]\033[0m")
+            print(response_text)
+            print("\033[96m" + "=" * 60 + "\033[0m\n")
 
         if not response_text.strip():
             step_generate.output = "Empty response."
@@ -369,7 +673,6 @@ async def handle_weather_query(query: str):
     async with cl.Step(name="Detecting Location", type="run") as step_locate:
         print("\033[94m[INFO]\033[0m Detecting locations using HuggingFace NER...")
 
-        # Use HuggingFace to extract location entities
         response = requests.post(api_url, json=query_payload, headers=headers)
 
         if response.status_code == 200:
@@ -399,7 +702,9 @@ async def handle_weather_query(query: str):
     msg = cl.Message(content="", author="OpenWeather Bot")
 
     for location in locations:
-        async with cl.Step(name=f"Fetching Weather: {location}", type="run") as step_weather:
+        async with cl.Step(
+            name=f"Fetching Weather: {location}", type="run"
+        ) as step_weather:
             try:
                 weather_url = (
                     f"https://api.openweathermap.org/data/2.5/forecast?q={location}&units=metric&appid={OPENWEATHER_TOKEN}"
@@ -422,30 +727,47 @@ async def handle_weather_query(query: str):
 
                 data = weather_response.json()
 
-                async with cl.Step(name=f"Streaming Weather Info: {location}", type="run") as step_stream:
-                    if tense == "FUT":
-                        forecast = data["list"][:3]
-                        await msg.stream_token(f"**Forecast for {location}:**\n\n")
-                        for entry in forecast:
-                            dt_txt = entry["dt_txt"]
-                            temp = entry["main"]["temp"]
-                            desc = entry["weather"][0]["description"]
-                            await msg.stream_token(f"- {dt_txt}: {temp}°C, {desc}\n")
-                    else:
-                        temp = data["main"]["temp"]
-                        desc = data["weather"][0]["description"]
-                        humidity = data["main"]["humidity"]
-                        wind = data["wind"]["speed"]
-                        await msg.stream_token(
-                            f"**Current weather in {location}:**\n"
-                            f"- Temperature: {temp}°C\n"
-                            f"- Condition: {desc}\n"
-                            f"- Humidity: {humidity}%\n"
-                            f"- Wind Speed: {wind} m/s\n\n"
-                        )
-                        step_stream.output = "Weather sent."
-                    print(f"\033[92m[SUCCESS]\033[0m Weather data fetched for {location}")
-                    step_weather.output = "Weather fetched."
+                # Prepare raw text summary
+                if tense == "FUT":
+                    forecast = data["list"][:3]
+                    raw_weather = "\n".join(
+                        f"{entry['dt_txt']}: {entry['main']['temp']}°C, {entry['weather'][0]['description']}"
+                        for entry in forecast
+                    )
+                else:
+                    raw_weather = (
+                        f"Temperature: {data['main']['temp']}°C\n"
+                        f"Condition: {data['weather'][0]['description']}\n"
+                        f"Humidity: {data['main']['humidity']}%\n"
+                        f"Wind: {data['wind']['speed']} m/s"
+                    )
+
+                # Create prompt for weather synthesis
+                weather_prompt = f"""
+You are MarinEnGPT, a professional assistant specializing in marine and coastal weather reporting.
+
+The user asked: "{query}"
+
+Below is the weather data for location: {location}
+Timeframe: {"Future forecast" if tense == "FUT" else "Current conditions"}
+
+Weather Data:
+{raw_weather}
+
+Based on this data, generate a helpful summary with:
+- Key weather conditions
+- Any precautions or recommendations
+- Professional and concise tone
+
+Answer:"""
+
+                # Call LLM to summarize
+                llm_response = Settings.llm.complete(weather_prompt)
+                response_text = llm_response.text.strip()
+
+                await msg.stream_token(response_text + "\n")
+                step_weather.output = "Weather summarized."
+                print(f"\033[92m[SUCCESS]\033[0m LLM weather synthesis complete.")
 
             except Exception as e:
                 step_weather.output = "Exception"
