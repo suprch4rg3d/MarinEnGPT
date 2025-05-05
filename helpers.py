@@ -1,9 +1,10 @@
 import os
 import sys
 import tomllib
+from pprint import pp
 
 def dd(obj):
-    print(obj)
+    pp(obj)
     sys.exit()
 
 def d(obj):
