@@ -7,7 +7,7 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = ">=3.12,<3.13"
 clip = {git = "https://github.com/openai/CLIP.git"}
 chainlit = "2.4.400"
 llama-index = "0.12.28"
@@ -21,6 +21,8 @@ pyperclip = "^1.9.0"
 python-dotenv = "^1.0.1"
 chromadb = "0.6.3"
 llama-index-vector-stores-chroma = "^0.4.1"
+spacy = "^3.8.5"
+scikit-learn = "^1.6.1"
 
 
 [build-system]

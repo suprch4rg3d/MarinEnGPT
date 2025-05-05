@@ -1,5 +1,6 @@
 data/
 storage/
+evals/
 batch_input.jsonl
 batch_output.jsonl
 ocr_openai_persistence.json
