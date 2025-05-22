@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "marinengpt-demo"
+name = "marinengpt"
 version = "0.1.0"
 description = ""
 authors = ["suprch4rg3d <emmanueloikonomou@gmail.com>"]
@@ -7,11 +7,22 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.12"
-chainlit = "^1.1.306"
-llama-index = "^0.10.58"
-pymupdf = "^1.24.9"
-ocrmypdf = "^16.4.2"
+python = ">=3.12,<3.13"
+clip = {git = "https://github.com/openai/CLIP.git"}
+chainlit = "2.4.400"
+llama-index = "0.12.28"
+openai = "1.70.0"
+pymupdf = "^1.25.1"
+ocrmypdf = "^16.7.0"
+pydantic = "2.10.1"
+llama-index-tools-weather = "^0.3.0"
+llama-index-embeddings-clip = "^0.3.1"
+pyperclip = "^1.9.0"
+python-dotenv = "^1.0.1"
+chromadb = "0.6.3"
+llama-index-vector-stores-chroma = "^0.4.1"
+spacy = "^3.8.5"
+scikit-learn = "^1.6.1"
 
 
 [build-system]

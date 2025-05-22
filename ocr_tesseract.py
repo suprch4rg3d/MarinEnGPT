@@ -1,5 +1,6 @@
 import os
 import ocrmypdf
+import fitz  # PyMuPDF
 
 
 def ocr_file(pdf_path):
@@ -20,6 +21,35 @@ def ocr_file(pdf_path):
             print(f"OCR added successfully to {pdf_path}")
     except Exception as e:
         print(f"Error adding OCR to {pdf_path}: {str(e)}")
+
+def ocr_and_extract_text(pdf_path, output_text_path):
+    try:
+        # Use OCRmyPDF API to add OCR layers, correct rotation, deskew, and detect languages
+        ocrmypdf.ocr(
+            pdf_path,
+            pdf_path,
+            redo_ocr=False,
+            force_ocr=True,
+            rotate_pages=True,
+            deskew=True,
+            language=["eng", "chi_sim"],
+        )
+
+        # Extract text from the OCR-processed PDF
+        with fitz.open(pdf_path) as pdf_document:
+            text = ""
+            for page_num in range(pdf_document.page_count):
+                page = pdf_document.load_page(page_num)
+                text += page.get_text()
+
+        # Save the extracted text to a file
+        with open(output_text_path, "w", encoding="utf-8") as text_file:
+            text_file.write(text)
+
+        print(f"Text successfully extracted to {output_text_path}")
+
+    except Exception as e:
+        print(f"Error processing {pdf_path}: {str(e)}")
 
 
 def ocr_generator(data_folder):

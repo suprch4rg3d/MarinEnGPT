@@ -1,0 +1,557 @@
+国
+面
+来
+历
+PREPARED BY SHI-ME.
+S.N9. 1347
+This drawing is prepared as fitted plan.
+THIS DRAWING IS THE EXCLUSIVE
+PROPERTY OF SUMITOMO HEAVY INDUSTRIES
+MARINE& ENGINEERING CO.,LTD.
+IT 1S NOT ALLOWED TO MULTIPLY
+THIS DRAWING OR TO SHOW THIS
+DRAWING OR PART THEREOF TO ANY
+THIRD PARTY WITHOUT WRITTEN
+PERMISSION OF SUMITOMO HEAVY INDUSTRIES
+MARINE& ENGINEERING CO.,LTD.
+FINISHED PLAN
+FILING NO MF — 50
+TOTAL SHEETS
+(WITH COVER
+ 
+) 8 A4 - 8
+〇
+一
+cD
+〇
+PACIFIC GENESIS
+=
+IMO NO. 9413016
+PROPELLER DRAWING-OUT
+AND
+FITTING
+O
+w
+一
+乙
+乙八取外L
+丶
+从
+押
+边办要颂
+REVISION
+[
+3
+2
+4
+SCALE
+一
+SUMITOMO HEAVY INDUSTRIES
+MARINE&ENGINEERING
+CO.
+, LTD.
+CONSTRUCTION MANAGEMENT DIVISION
+=
+|
+2
+|当[彗业|[邹[加工[外
+[建造]|_[* Lee
+监
+督
+业| 技术
+品| 物流
+业| 2
+装
+C | isk
+艘装员
+开|性能|
+|供| 管髻作
+|
+炼| 计
+画
+77—-{-Ab
+zm [1|*) eel |粑| 集酒]
+|葛|技希
+NK
+Bal
+ie El
+in 装
+襄
+造本部长
+JG
+机|机
+茹] ]
+品
+|舷
+体
+哉酥部其
+L R
+RHEE
+|e SS]
+|设|机
+电|
+273矣
+ABS
+海务|
+|778-+-tX
+DNV
+构造设计
++7
+业务G
+襄
+造2一力
+BV
+胎装设计|
+|
+显|大
+秧
+机装设计| | 【船
+裸
+SHI 当业
+町装设计
+不|机
+装
+多|横
+须贺
+控
+E
+SHI 资材
+电装
+理| 佐世保
+合
+计
+‖ 3
+DRAWN BY
+|. Uchibayashi
+HE
+CHECK ITEM
+DATE
+14 Apr. 2009
+ae
+en
+/)
+WORK NO.
+NN347
+Ed
+t
+eseroue |
+_Moz
+|
+心
+OF SECTION Phen é
+h, 小
+CLASSIF.
+M03 - 10
+|
+cot in
+crawnane | MF -50
+| 7
+S.No. 1347/48
+Propeller Drawing-Out and Fitting P- 1
+1. Tools for propeller drawing-out and fitting
+1-1
+1)
+2)
+3)
+4)
+9)
+6)
+1-2
+xr PROPELLER DRAWING-OUT
+ 
+AND FITTING
+Tools for propeller drawing-out
+Oil pump with pressure gauge
+Min. pressure : 70 MPa
+Coupler with packing
+( supplied by the builder
+ 
+)
+Flexible hose
+Turning bars for propeller nut
+( supplied by the builder
+ 
+)
+Wooden piece
+Oil for oil pump
+Tools for propeller fitting
+1) Oil pump with pressure gauge
+2)
+3)
+4)
+9)
+6)
+)
+8)
+9)
+Min. pressure : 70 MPa
+Dial gauge with magnetic holder
+Thermometer ( 100°C )
+Coupler with packing
+(supplied by the builder
+ 
+)
+Coupler with packing
+( supplied by hydraulic nut maker
+ 
+)
+Flexible hose
+Turning bar for propeller nut
+(supplied by the builder
+ 
+)
+Oil for oil pump
+2-way branch
+1 set
+1 set
+1 set
+& Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting P- 2
+2. Procedure of drawing-out for propeller
+2-1 _Lift the propeller using wire, chain block and winch.
+2-2 Take off the fair water cap.
+2-3 Loose the propeller nut using the turning bars for propeller nut.
+2-4 Fit the wooden piece for buffer between the propeller nut and propeller boss.
+At this time, a clearance between the wooden piece and the aft end surface of the propeller boss
+shall be about 20 mm. ( Corresponding to the maximum fitting travel
+ 
+)
+2-5 Take off the plug from the boss expansion oil port in the propeller boss and fit the coupler
+with packing to oil port in the propeller boss.
+2-6 Install the flexible hoses between the oil pump and oil port in the propeller boss.
+2-7 Oil pressure of oil pump is raised gradually until about 58 MPa.
+In case of propeller boss not move, the oil pressure is raised gradually.
+( In this case, the pressure must not be exceeded 70 MPa. )
+2-8 After successful movement of propeller boss aftwards , stop the oil pump
+ 
+, i.e. oil pump indication 0 MPa.
+2-9 Take off the coupler with packing from oil port in the propeller boss.
+2-10 Take off the propeller nut and the wooden piece.
+2-11 Remove the propeller using wire, chain block and winch.
+abt. 20 mm
+Propeller Boss
+Wooden Piece J
+Propeller Nut 一 一 占
+| 国
+<
++
+Propeller Shaft
+1
+一
+:
+Pressure Gauge
+' Coupler
+Oil Pump 囱
+for Boss Expansion
+Flexible Hose
+Fig.1 ARRANGEMENT OF DRAWING-OUT FOR PROPELLER
+志Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting P- 3
+3. Preparation of fitting for propeller
+3-1 Clean the cone part of the propeller boss and propeller shaft with thinner.
+3-2 Lift up the propeller and mount it on the propeller shaft.
+At this time, position the No.1 cyl. top mark of the propeller boss end to the aft end of cone part
+of propeller shaft.
+3-3 Fit the propeller nut (hydraulic type) to the propeller shaft.
+3-4 Fit the coupler with packing to the boss expansion oil port in the propeller boss, hydraulic nut
+and 2 way branch with shut off valve.
+3-5 Fill oil in the oil pump.
+3-6 Install the flexible hoses between the 2 way branch and hydraulic nut, between 2 way branch and
+expansion oil port in propeller boss and between 2 way branch and the oil pump.
+3-7 Fit the dial gauges with the magnetic holder on the propeller shaft.
+3-8 Fit a thermometer to each of the propeller boss and propeller shaft end.
+Thermometer Dial Gauge
+Propeller Boss
+Hydraulic Nut
+Coupler 2) 门 巳 戛 | i
+\ Propeller Shaft |
+Pressure Gauge |
+行
+Coupler oO
+Lo
+E
+a
+门
+/ Flexible Hose
+Fig.2 ARRANGEMENT OF FITTING FOR PROPELLER
+Oil Pump
+2 Way Branch
+志Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting 厂
+ 
+- 4
+4. Fitting of propeller
+4-1
+4-2
+1)
+2)
+3)
+4-3
+1)
+2)
+3)
+4)
+9)
+6)
+Decision of travel of the propeller boss
+Just before the propeller fitting, the temperature of the propeller boss and propeller shaft should
+be measured. The required fitting travel to be decided based on measured fitting temperature
+according to “ CALCULATION SHEET OF PROPELLER FITTING “ ( Fig.3
+ 
+) .
+Dry fitting ( First step )
+The oil pressure of hydraulic nut to be increased to rule required starting point load ;
+Rule required starting point load = 6.000 x10°N
+The oil pressure of hydraulic nut= 4.40 MPa (Nutram area= 136,345 mm )
+In this case, do not fill the lubricating oil to the interface of propeller boss and shaft.
+The dial gauge to be fitted at fwd end of propeller boss and set at " ZERO " reading.
+The oil pressure of hydraulic nut to be raised gradually and the travel of boss to be measured
+by the dial gauge at oil pressure 10, 15, 20, 25, 30 MPa.
+Wet fitting (Second step)
+Fill the lubricating oil to interface of propeller boss and shaft.
+The oil pressure of hydraulic nut and the interface of propeller boss and shaft to be raised gradually
+The travel of boss to be measured at oil pressure 10, 15, 20, 25, 30, ...... MPa.
+( The oil pressure of the interfaces must not exceed 70 MPa. )
+After these measured points are confirmed being on a line, the oil pressure to be raised until
+the required fitting travel of boss is obtained.
+When the propeller boss to be reached in the required fitting travel, release the boss expansion
+oil pressure and then after about 2~3 minutes the fitting oil pressure.
+Remove the dial gauge, flexible hoses and pump etc.
+Fit the plug to the boss expansion oil port in the propeller boss and hydraulic nut.
+© Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting P- 5
+**+* CALCULATION OF KEYLESS PROPELLER BY LLOYD RULE ***
+“ ORDER NAME 一 SUMITOMO OEAVY INDUSTRIES MARINESENGSINERRING Co., LTD.
+丶
+MATN
+ENGINE
+*
+TYPE MAN B&W 6S60MC-C
+口
+ 
+.
+ 
+又
+ 
+.
+ 
+一
+ 
+. M.C.R.= 12,350 (Rw)
+亨 -已. M - 广
+ 
+了 . 白 (RPM}
+* PROPELLER 一
+TYPE 5 BLADES PAI TYPE
+DIAMETER 6650,0 (MI)
+PITCH S179.7 {MM}
+DEVIA.R.,
+MATERIAL GRADE CUR (NLI-AL-BRONZE)
+WEIGHT 25630 (kc)
+* INPUT DATA *
+sD
+=
+590.0
+Cem}
+eh]
+=
+0 .0
+(mm)
+SDM
+二
+553.15
+(rm)
+DM
+=
+LL25.3
+(mm)
+TAPER =
+1/20=
+0.05
+A =
+2516400
+(om)
+EB = 120620 (N/mm} ET = 206920 (N/mm) VB = 0.33 VT = 0.26
+LB = 0.0000175 LT = 0.000011
+ 
+8 Y-0.2 = 245 (N/mm) U= 0.13
+TT at MCO = 260184.4 (N-m} TM at MCO = 1215815.1 (N-m) C= 0.214
+TT at Cr. = 1576000.0 (N-mi TH at Cr. = 361605.8 (N-m) K= 2
+Mat MCO = 1363.12 (kN) M at Cr. = 405.81 (kN)
+kee COMPUTATION TABLE ***
+MIN. START POINT LOAD ; 毋 五 600.0 (kN}
+TEMP. DELTA Pi Bl 22 STGMAL STIGMA? STGMA3
+(C) (TM} (MPa) (EN) (kN) (MPaj (MPa) (MPa)
+35,0 LO.60 48.20 弘日口 水 工 日 马 了 3 一 日 白 、马 日 -43.26 工
+ 
+工
+ 
+1 . 工
+ 
+日
+20.0 LO,&2 49,63 4395 1L6e6o 一 日 口
+ 
+、
+ 
+丿
+ 
+白 一 一 口 , 口
+ 
+3 114.46
+25,0 工
+ 
+1 . 巳 3 51.06 5149 17346 -102,12 -51.06 LLP. TF
+20.6 L1.55 52.49 5284 工 8 口 3 -104,99 -52.495 121.07
+15.0 11.67 53.53 9428 124320 -107,86 一 口
+ 
+关 , 口 3 124.38
+工
+ 
+Q , D 12.18 55,34 5572 Leeo? -110,72 一 与
+ 
+史
+ 
+、 马
+ 
+白 127.68
+口 ,一 12.50 日
+ 
+口
+ 
+75 口 工 19294 -113.595 一
+ 
+口
+ 
+白
+ 
+、
+ 
+了
+ 
+马 130.99
+a. 12.81 口
+ 
+月 , 志
+ 
+巳 5861 LS78G - 小 1 日 5 -58.23 134.29
+LIMIT ©.0 16.70 75.08 了
+ 
+口 马 日 25777 一 工 工 . 了
+ 
+井 -75,98 175.00
+心Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting 乙
+ 
+- 6
+mm
+PUSH-UP
+ 
+LENGTH
+ 
+Ly,
+ 
+L2
+20
+19
+18
+17
+16
+15
+14
+13
+12
+11
+10
+MAX. (UPPER LIMIT) , L>
+异 L1 + 3.89 44
+........._...
+CEPT tT yet
+MIN. (LOWER LIMIT) , L, 4
+12.81 -0.0631 x T1 比
+EEEEH FFHFHFFHFFFHHHHHTHHHHHHHHHHHHHHHHHHHHHHHHTHHHHHEHHHHH
+-20 -10 0 10 20 30 40 50
+FITTING TEMPERATURE T1 °C
+Fig.3 PUSH-UP LENGTH vs. FITTING TEMPERATURE
+@ Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+S.No. 1347/48
+Propeller Drawing-Out and Fitting P- 7
+3AHn0ONILLIAH3113d0HdGANDISSO¢'6i4
+7 Gre'oel : bole WeyedN vl : ainsseid 6UPHoN\ FJONVS WIGNO Oy3Z JO LNIOd
+wu Ge: syo41S XB|AadAl 2llIneJpKH : adALLAN an3dOyd (2。0 = 人 ) TSAAVYHL ONILLIA GaYuIND’YdOZP332XeJOU1}Snu329HnSYEYSPULSSo9(2,sg=心)JaAyyLONILLIJq39Inp3
+JelladoJd
+Jo
+s5
+Jeuul
+Sy]
+usaeNWeq
+sJnsseJd
+|lo
+SUL
+:
+3LON
+wu
+ 
+,“ssOg
+ 
+H3m3adOHd
+ 
+JO
+ 
+13AVYHL
+O¢ 6 ( 。
+ 
+弛 乙 | QI Gl vl el ch LL OL 6 8 丿 9 S t 5 C 【 0 L-
+0 5 0
+_ OL
+0002
+ 
+1
+| 0Z
+000t
+ 
+1
+ 
+08
+万
+Cc
+Z
+ 
+OF
+一 0009 中
+丁 ] rr
+一
+ 
+08L「0
+ 
+=
+ 
+7
+ 
+os
+O
+ 
+(eee
+> EEEEEELEEEEEEEEEEEH
+口
+ 
+|
+ 
+N=7
+- 0008 5L0 0 = DNILLLI AY 09
+x 1 HHHHHFHHFHHH F
+< 0z0'0
+ 
+= 77FEEEEEEEEEEEEEEEEH} 04
+00001 1 cz0-0
+ 
+= 1
+08
+06
+COL
+怀Sumitomo Heavy Industries Marine&Engineering Co.,Ltd
+edW § FYNSS3ed 110
