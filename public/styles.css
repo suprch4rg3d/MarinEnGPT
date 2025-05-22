@@ -1,15 +1,17 @@
+/*DEPRECATED*/
+
 /* Logo Without Opening The Sidebar */
-#header > img:nth-child(2) {
+#header>img:nth-child(2) {
     max-height: 50px !important;
 }
 
 /* Logo After Opening The Sidebar */
-.css-14k6mw7 > img:nth-child(1) {
+.css-14k6mw7>img:nth-child(1) {
     max-height: 50px !important;
-    margin:auto;
+    margin: auto;
 }
 
-.css-m2icte > img:nth-child(1){
+.css-m2icte>img:nth-child(1) {
     width: 90%;
     height: 90%;
 }

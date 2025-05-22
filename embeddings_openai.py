@@ -3258,20 +3258,24 @@ def perform_semantic_search():
         if model_override:
             model = model_override
             dimensions = collection_dim if "text-embedding-3" in model else None
-        elif collection_dim == 1536:
-            model = "text-embedding-3-large"
-            dimensions = 1536
-        elif collection_dim == 384:
-            model = "text-embedding-3-small"
-            dimensions = 384
-        elif collection_dim == 512:
-            model = "text-embedding-ada-002"
-            dimensions = None
         else:
-            print(
-                f"\033[31mUnsupported collection dimensionality: {collection_dim}\033[0m"
-            )
-            return
+            # Auto-detect model based on dimensionality
+            if collection_dim in [1536, 3072, 4096]:
+                model = "text-embedding-3-large"
+                dimensions = collection_dim
+            elif collection_dim in [256, 384]:
+                model = "text-embedding-3-small"
+                dimensions = collection_dim
+            elif collection_dim == 512:
+                model = "text-embedding-ada-002"
+                dimensions = None
+            else:
+                print(
+                    f"\033[31mUnsupported collection dimensionality: {collection_dim}\033[0m"
+                )
+                return
+
+        print(f"\nUsing model: \033[36m{model}\033[0m with dimensions: {dimensions}")
 
         # Generate embedding
         try:

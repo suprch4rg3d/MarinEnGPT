@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 import inspect
 import collections
-import tomllib
 
 # Persistence Configuration
 PERSISTENCE_FILE = "ocr_openai_persistence.json"
@@ -777,10 +776,10 @@ def get_openai_balance():
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401 or "session key" in e.response.text:
-            print("\n=== Balance Retrieval Restricted ===")
+            print("\n=== Balance Retrieval Restricted ===\n\n")
             print(
                 "The OpenAI API key you are using cannot access balance information because the "
-                "endpoint `/v1/dashboard/billing/credit_grants` is restricted to session keys. "
+                "endpoint `/v1/dashboard/billing/credit_grants` is restricted to session keys.\n\n "
                 "Session keys are used for browser-based contexts where user authentication occurs.\n"
             )
             print(
@@ -789,8 +788,8 @@ def get_openai_balance():
             )
             print(
                 "To check your balance, please log in to the OpenAI Dashboard and navigate to the "
-                "Billing or Usage section:\n"
-                "https://platform.openai.com/account/usage\n"
+                "Billing or Usage section:\thttps://platform.openai.com/account/usage\n"
+                "\n"
             )
             print("==========================\n")
         else:

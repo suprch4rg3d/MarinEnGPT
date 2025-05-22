@@ -22,10 +22,11 @@ from llama_index.core.evaluation import (
 )
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.embeddings import resolve_embed_model
+
 # from llama_index.core.utils import cosine_similarity  - Removed..why LlamaIndex, why?
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from llama_index.core.schema import NodeWithScore  
+from llama_index.core.schema import NodeWithScore
 
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from chromadb import PersistentClient
@@ -63,6 +64,13 @@ HF_TOKEN: Optional[str] = os.getenv("HUGGING_FACE_TOKEN")
 OPENWEATHER_TOKEN: Optional[str] = os.getenv("OPENWEATHER_API_KEY")
 
 TOP_K_RESULTS = int(os.getenv("TOP_K_RETRIEVAL_RESULTS", 5))
+
+# Authentication and OAuth2 (Auth0)
+ENABLE_AUTH = os.getenv("ENABLE_AUTH", "false").lower() == "true"
+CHAINLIT_AUTH_SECRET = os.getenv("CHAINLIT_AUTH_SECRET", "")
+OAUTH_AUTH0_CLIENT_ID = os.getenv("OAUTH_AUTH0_CLIENT_ID", "")
+OAUTH_AUTH0_CLIENT_SECRET = os.getenv("OAUTH_AUTH0_CLIENT_SECRET", "")
+OAUTH_AUTH0_DOMAIN = os.getenv("OAUTH_AUTH0_DOMAIN", "")
 
 # Decoupled Retrieval & Synthesis Configuration
 ENABLE_DECOUPLED_SYNTHESIS = (
@@ -110,9 +118,64 @@ QA_EMBEDDING_MODE_FILTER = os.getenv("QA_EMBEDDING_MODE_FILTER", "").strip() or 
 QA_MATCH_THRESHOLD = float(os.getenv("QA_MATCH_THRESHOLD", 0.85))
 RETRIEVAL_DEBUG_MODE = os.getenv("RETRIEVAL_DEBUG", "false").lower() == "true"
 
+
+if ENABLE_AUTH:
+
+    @cl.password_auth_callback
+    def auth_callback(username: str, password: str) -> Optional[cl.User]:
+        """
+    Authenticate users using a username and password.
+
+    This callback is triggered when Chainlit is configured to use 
+    password-based authentication (ENABLE_AUTH=true) and no OAuth provider 
+    is active. It validates the provided credentials and returns a User object 
+    if authentication succeeds.
+
+    Args:
+        username (str): The username entered by the user.
+        password (str): The password entered by the user.
+
+    Returns:
+        Optional[cl.User]: A Chainlit User object if the credentials are valid;
+                           otherwise, None to deny access.
+        """
+        
+        # Replace this logic with real auth if needed
+        if username == "admin" and password == "1234":
+            return cl.User(identifier="admin", metadata={"role": "admin"})
+        return None
+    
+    @cl.oauth_callback
+    def oauth_callback(
+        provider_id: str,
+        token: str,
+        raw_user_data: Dict[str, str],
+        default_user: cl.User,
+    ) -> Optional[cl.User]:
+        """
+    Process and customize user authentication via OAuth providers.
+
+    This callback is called after a user has successfully authenticated 
+    via a configured OAuth provider (e.g., Auth0, GitHub, Google). It allows 
+    you to inspect or modify the default user object before granting access.
+
+    Args:
+        provider_id (str): The identifier of the OAuth provider (e.g., "auth0").
+        token (str): The access token issued by the OAuth provider.
+        raw_user_data (Dict[str, str]): Raw profile data returned by the provider.
+        default_user (cl.User): The default user constructed by Chainlit.
+
+    Returns:
+        Optional[cl.User]: The final Chainlit User object to be used for the session;
+                           return None to deny access.
+        """
+        return default_user
+
+
 def debug_log(*args, **kwargs):
     if RETRIEVAL_DEBUG_MODE:
         print(*args, **kwargs)
+
 
 def load_embedding_config(config_path="./embeddings_openai_persistence.json"):
     try:
@@ -409,7 +472,9 @@ def generate_qa_dataset(
     # dd(all_nodes)
 
     # TEMP DEBUGGING BLOCK:
-    print(f"\033[90m[DEBUG]\033[0m Total nodes retrieved from ChromaVectorStore: {len(all_nodes)}")
+    print(
+        f"\033[90m[DEBUG]\033[0m Total nodes retrieved from ChromaVectorStore: {len(all_nodes)}"
+    )
     for i, node in enumerate(all_nodes[:3]):  # Print first 3 nodes
         print(f"\033[90m[DEBUG]\033[0m Node {i} metadata: {node.metadata}")
 
@@ -515,7 +580,7 @@ def find_closest_qa_query(
         if score > best_score:
             best_score = score
             best_match = known_query
-    
+
     print(f"\033[90m[DEBUG]\033[0m Best match score: {best_score:.4f}")
     print(f"\033[90m[DEBUG]\033[0m Best matched QA: {best_match}")
 
@@ -610,7 +675,7 @@ def summarize_eval_data(eval_data):
             summary["matched_manual_queries"] += 1
         else:
             summary["unmatched_manual_queries"] += 1
-            
+
         for result in entry.get("top_k_results", []):
             try:
                 score = float(result.get("score", 0))
@@ -715,6 +780,29 @@ class LLMResponseWrapper:
         self.response = response
         self.source_nodes = source_nodes or []
 
+@cl.set_starters
+async def set_starters():
+    """
+    Define suggested chat starters for new users.
+    These will appear as buttons in the UI before the first message.
+    """
+    return [
+        cl.Starter(
+            label="Tell me about Fe/Cu ion systems",
+            message="Can you explain how Fe/Cu ion systems work on ships?",
+            icon="./public/wrench-starter.svg" 
+        ),
+        cl.Starter(
+            label="Browse service manuals",
+            message="Show me the available marine service manuals.",
+            icon="./public/book-starter.svg"
+        ),
+        cl.Starter(
+            label="What's the weather like in Singapore?",
+            message="What's the weather like in Singapore right now?",
+            icon="./public/weather-starter.svg"
+        )
+    ]
 
 @cl.on_chat_start
 async def start():
@@ -758,9 +846,59 @@ async def start():
     if enable_context:
         cl.user_session.set("chat_history", [])  # Initialize empty list
 
+    ## Commented out because otherwise the starters were ignored
+    # await cl.Message(
+    #     author="MarinEnGPT",
+    #     content="Hello! I am MarinEnGPT, an AI Assistant specialized in Marine Engineering Service Manuals.\n\nSelect one of the suggestions below to get started.",
+    # ).send()
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread):
+    """
+    Restore the previous chat session when a user returns.
+
+    Args:
+        thread (ThreadDict): A dictionary containing messages and metadata from the previous session.
+    """
+    print(
+        f"\033[90m[DEBUG]\033[0m Resuming thread with {len(thread['steps'])} messages."
+    )
+
+    # Reinitialize session state
+    cl.user_session.set("chat_history", [])
+    cl.user_session.set("eval_data", [])
+    cl.user_session.set("eval_start_time", datetime.now().isoformat())
+
+    # Retrieve OpenAI token
+    if ENABLE_USER_ENV:
+        user_env = cl.user_session.get("env", {})
+        openai_token = user_env.get("OPENAI_API_KEY")
+    else:
+        openai_token = os.getenv("OPENAI_API_KEY")
+
+    cl.user_session.set("openai_token", openai_token)
+
+    # Restore short-term chat history if enabled
+    enable_context = os.getenv("ENABLE_CHAT_HISTORY_CONTEXT", "false").lower() == "true"
+    cl.user_session.set("enable_chat_history", enable_context)
+
+    if enable_context:
+        restored_chat = []
+        for step in thread["steps"]:
+            if step.get("type") == "user_message":
+                restored_chat.append(
+                    {"role": "user", "content": step.get("output", "")}
+                )
+            elif step.get("type") == "assistant_message":
+                restored_chat.append(
+                    {"role": "assistant", "content": step.get("output", "")}
+                )
+        cl.user_session.set("chat_history", restored_chat)
+
     await cl.Message(
-        author="MarinEnGPT",
-        content="Hello! I am MarinEnGPT, an AI Assistant specialized in Marine Engineering Service Manuals.\n\nHow may I help you?",
+        author="System",
+        content="Welcome back. Your previous conversation has been restored.",
     ).send()
 
 
@@ -805,7 +943,9 @@ async def view_as_image(action: cl.Action):
             content="Here are the references as images:", elements=elements
         ).send()
     else:
-        await cl.Message(content="No images available for the selected references.").send()
+        await cl.Message(
+            content="No images available for the selected references."
+        ).send()
 
 
 @cl.action_callback("view_as_markdown")
@@ -1119,7 +1259,7 @@ async def handle_eval_freeze_trigger(content: str) -> bool:
                     "model",
                     "source_file",
                     "token_count",
-                    "matched_manual",   
+                    "matched_manual",
                 ]
             )
             for entry in eval_data:
@@ -1400,12 +1540,13 @@ async def handle_semantic_query(
 
         # Detect whether retrieved chunks match the QA_SOURCE_FILE_FILTER
         retrieved_manuals = {
-            node.metadata.get("source_file", "").lower()
-            for node in valid_nodes
+            node.metadata.get("source_file", "").lower() for node in valid_nodes
         }
         qa_filter = QA_SOURCE_FILE_FILTER.lower() if QA_SOURCE_FILE_FILTER else None
 
-        manual_match = any(qa_filter in src for src in retrieved_manuals) if qa_filter else True
+        manual_match = (
+            any(qa_filter in src for src in retrieved_manuals) if qa_filter else True
+        )
 
         # Evaluate retrieval after filtering valid
         retriever_evaluator = RetrieverEvaluator.from_metric_names(
@@ -1419,10 +1560,16 @@ async def handle_semantic_query(
         # Lazy-load QA dataset on first semantic query if needed
         if qa_lookup is None:
             if not ENABLE_QA_DATASET_GENERATION:
-                print("\033[94m[INFO]\033[0m Synthetic QA dataset generation is disabled. Skipping retrieval evaluation.")
-                cl.user_session.set("qa_lookup", {})  # Set to empty to avoid re-entering
+                print(
+                    "\033[94m[INFO]\033[0m Synthetic QA dataset generation is disabled. Skipping retrieval evaluation."
+                )
+                cl.user_session.set(
+                    "qa_lookup", {}
+                )  # Set to empty to avoid re-entering
             else:
-                async with cl.Step(name="Generate QA Dataset", type="run") as step_qa_gen:
+                async with cl.Step(
+                    name="Generate QA Dataset", type="run"
+                ) as step_qa_gen:
                     print(f"\033[90m[DEBUG]\033[0m Generating synthetic QA dataset...")
                     print(
                         f"\033[90m[DEBUG]\033[0m Generating synthetic QA dataset for evaluation "
@@ -1441,7 +1588,9 @@ async def handle_semantic_query(
                     # Apparently, RagDatasetGenerator does not have key-value pair for reference node_ids so more manual labour for me..smfh
                     # Construct mapping: question → list of expected node IDs
                     for i, example in enumerate(dataset[:10]):  # limit to 10 for debug
-                        print(f"\033[90m[DEBUG]\033[0m Example {i} type: {type(example)}")
+                        print(
+                            f"\033[90m[DEBUG]\033[0m Example {i} type: {type(example)}"
+                        )
                         print(f"\033[90m[DEBUG]\033[0m Query: {example.query}")
                         print(
                             f"\033[90m[DEBUG]\033[0m Contexts: {example.reference_contexts}"
@@ -1459,21 +1608,32 @@ async def handle_semantic_query(
                         if expected_ids:
                             qa_lookup[example.query] = expected_ids
                     # [DEBUG] Preview generated QA lookup entries to verify mapping accuracy
-                    print("\033[90m[DEBUG]\033[0m QA Lookup table initialized with",
-                        len(qa_lookup), "entries")
+                    print(
+                        "\033[90m[DEBUG]\033[0m QA Lookup table initialized with",
+                        len(qa_lookup),
+                        "entries",
+                    )
                     for i, (q, ids) in enumerate(list(qa_lookup.items())[:3]):
                         print(f" ├─ Q{i+1}: {q[:80]}...")
                         print(f" └─ Expected IDs: {ids}")
 
                     cl.user_session.set("qa_lookup", qa_lookup)
 
-                    step_qa_gen.output = f"{len(qa_lookup)} QA pairs created." 
+                    step_qa_gen.output = f"{len(qa_lookup)} QA pairs created."
 
                 print("\033[94m[INFO]\033[0m Retrieval Evaluation Setup:")
-                print(" - Evaluation metrics (hit rate, MRR, precision, recall, etc.) are based on exact or fuzzy matches to the expected chunk IDs.")
-                print(" - These expected IDs are derived from a synthetic QA dataset using the MF-194 manual.")
-                print(" - MF-194 is chosen because it is small and avoids OpenAI rate limits.")
-                print(" - Fuzzy matching is enabled to tolerate paraphrased queries and provide more robust evaluations.")
+                print(
+                    " - Evaluation metrics (hit rate, MRR, precision, recall, etc.) are based on exact or fuzzy matches to the expected chunk IDs."
+                )
+                print(
+                    " - These expected IDs are derived from a synthetic QA dataset using the MF-194 manual."
+                )
+                print(
+                    " - MF-194 is chosen because it is small and avoids OpenAI rate limits."
+                )
+                print(
+                    " - Fuzzy matching is enabled to tolerate paraphrased queries and provide more robust evaluations."
+                )
                 print(f" - Fuzzy match threshold: {QA_MATCH_THRESHOLD:.2f}\n")
 
         async with cl.Step(name="Match QA Query", type="run") as step_match:
@@ -1498,11 +1658,17 @@ async def handle_semantic_query(
                 print(f" - {base_node.node_id}")
 
                 # Normalize: strip "_chunk_#" suffix to match expected full-page IDs
-                norm_id = base_node.node_id.split("_chunk_")[0] if "_chunk_" in base_node.node_id else base_node.node_id
+                norm_id = (
+                    base_node.node_id.split("_chunk_")[0]
+                    if "_chunk_" in base_node.node_id
+                    else base_node.node_id
+                )
 
                 # Create a shallow copy of the node and override node_id
                 base_node_copy = base_node.copy()
-                base_node_copy.node_id = norm_id  # Needed for accurate comparison inside evaluator
+                base_node_copy.node_id = (
+                    norm_id  # Needed for accurate comparison inside evaluator
+                )
 
                 # Wrap in NodeWithScore using normalized ID and appropriate score
                 eval_nodes.append(
@@ -1515,7 +1681,9 @@ async def handle_semantic_query(
             # DEBUG: Confirm evaluator sees the correct node IDs
             print("[DEBUG] Effective node IDs seen by evaluator:")
             for e in eval_nodes:
-                print(f" - Wrapper node_id: {e.node_id} | Inner node.node_id: {e.node.node_id}")
+                print(
+                    f" - Wrapper node_id: {e.node_id} | Inner node.node_id: {e.node.node_id}"
+                )
 
             # Print normalized IDs to be passed to evaluator
             print("[DEBUG] Normalized node IDs passed to evaluator:")
@@ -1531,7 +1699,9 @@ async def handle_semantic_query(
             print("[DEBUG] Comparing normalized node IDs to expected IDs:")
             for node in eval_nodes:
                 for eid in expected_ids:
-                    print(f"  - {node.node_id.strip()} == {eid.strip()} ? {node.node_id.strip() == eid.strip()}")
+                    print(
+                        f"  - {node.node_id.strip()} == {eid.strip()} ? {node.node_id.strip() == eid.strip()}"
+                    )
 
             # Show intersection set for final confirmation
             matched_ids = {n.node_id.strip() for n in eval_nodes}
@@ -1547,7 +1717,9 @@ async def handle_semantic_query(
                     expected_ids=expected_ids,
                 )
 
-                retrieval_eval = retrieval_result if isinstance(retrieval_result, dict) else {}
+                retrieval_eval = (
+                    retrieval_result if isinstance(retrieval_result, dict) else {}
+                )
 
                 if retrieval_eval:
                     step_eval.output = "Evaluator returned metrics."
@@ -1557,9 +1729,13 @@ async def handle_semantic_query(
                 print(f"[EVAL][Retrieval Metrics] {retrieval_eval}")
 
             if not retrieval_eval:
-                print("[WARNING] Evaluator returned empty result. Falling back to manual check.")
+                print(
+                    "[WARNING] Evaluator returned empty result. Falling back to manual check."
+                )
 
-                async with cl.Step(name="Fallback Evaluation", type="run") as step_fallback:
+                async with cl.Step(
+                    name="Fallback Evaluation", type="run"
+                ) as step_fallback:
                     # Manual fallback evaluation for sanity check
                     matched_ids = {n.node_id.strip() for n in eval_nodes}
                     expected_set = {e.strip() for e in expected_ids}
@@ -1567,15 +1743,21 @@ async def handle_semantic_query(
                     manual_hit = bool(matched_ids & expected_set)
                     print(f"[DEBUG] Manual Hit Detected: {manual_hit}")
 
-                    retrieval_eval = {
-                        "hit_rate": 1.0 if manual_hit else 0.0,
-                        "mrr": 1.0 if manual_hit else 0.0,
-                        "precision": 1.0 if manual_hit else 0.0,
-                        "recall": 1.0 if manual_hit else 0.0,
-                    } if manual_hit else {}
+                    retrieval_eval = (
+                        {
+                            "hit_rate": 1.0 if manual_hit else 0.0,
+                            "mrr": 1.0 if manual_hit else 0.0,
+                            "precision": 1.0 if manual_hit else 0.0,
+                            "recall": 1.0 if manual_hit else 0.0,
+                        }
+                        if manual_hit
+                        else {}
+                    )
 
                     step_fallback.output = (
-                        "Manual match successful." if manual_hit else "Manual match failed."
+                        "Manual match successful."
+                        if manual_hit
+                        else "Manual match failed."
                     )
 
         else:
@@ -1662,6 +1844,12 @@ async def handle_semantic_query(
             {context_prefix}Use the following technical context entries — which you have already internalized — to answer the user's question clearly, concisely, and accurately.
 
             Do not mention documents, excerpts, or sources. Only answer based on the given context. If the context lacks the information, say so directly.
+            
+            If the user asks to browse or list the available documents or manuals, summarize the available manuals or their topics based on what the context contains.
+            
+            If the user's query seems to refer to navigating a manual, explain what sections or pages are available from the context. If the context includes multiple manuals, try to identify which manual is relevant to the question.
+            
+            Do not refer to "images" or "figures" unless the context includes visual descriptions. If applicable, the assistant may mention that page references or visual excerpts are available on request.
 
             User Question:
             \"{content}\"

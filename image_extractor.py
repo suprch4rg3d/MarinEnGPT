@@ -71,7 +71,7 @@ def show_instructions():
             >A resize factor less than 1 means reducing the image size (e.g., a factor of 0.5 halves the size).
 
     2. Enable/Disable Logging:
-       - Enable or disable logging of all actions to 'process.log'.
+       - Enable or disable logging of all actions to 'image_extractor.log'.
 
     3. Extract Images from a Single PDF:
        - Extract embedded images from a PDF file.

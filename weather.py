@@ -1,3 +1,4 @@
+# This dictionary was deprecated due to false positives like "water flow". Now using is_weather_query() assertion
 weather_keywords = [
     "Weather",
     "Forecast",

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "marinengpt-demo"
+name = "marinengpt"
 version = "0.1.0"
 description = ""
 authors = ["suprch4rg3d <emmanueloikonomou@gmail.com>"]
