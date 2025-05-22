@@ -73,7 +73,7 @@ def main():
                 ["poetry", "run", "chainlit", "run", str(BASE_DIR / "app.py"), "-w"]
             )
         elif choice in ["q", "quit", "exit"]:
-            print("Exiting MarineN-GPT CLI Hub.")
+            print("Exiting MarinEnGPT CLI.\n\nBye!")
             break
         else:
             print("Invalid choice. Try again.")
