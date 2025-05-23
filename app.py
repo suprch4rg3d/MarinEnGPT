@@ -1850,6 +1850,9 @@ async def handle_semantic_query(
             If the user's query seems to refer to navigating a manual, explain what sections or pages are available from the context. If the context includes multiple manuals, try to identify which manual is relevant to the question.
             
             Do not refer to "images" or "figures" unless the context includes visual descriptions. If applicable, the assistant may mention that page references or visual excerpts are available on request.
+            
+            If the user's query asks for a list or overview of available manuals, provide a concise summary of each document or manual stored in the database based on the retrieved content. Include section titles or descriptions if available.
+
 
             User Question:
             \"{content}\"
