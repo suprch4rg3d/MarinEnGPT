@@ -1,3 +1,3 @@
 <p align="center">
-  <img src="./readme-marinengpt-logo.png" alt="MarinEnGPT Logo" width="500"/>
+  <img src="./readme-marinengpt-logo.png" alt="MarinEnGPT Logo" width="600"/>
 </p>
