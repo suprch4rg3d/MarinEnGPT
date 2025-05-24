@@ -1853,7 +1853,8 @@ async def handle_semantic_query(
             
             If the user's query asks for a list or overview of available manuals, provide a concise summary of each document or manual stored in the database based on the retrieved content. Include section titles or descriptions if available.
 
-
+            Always respond in the **same language** as the user's question. Do not translate.
+            
             User Question:
             \"{content}\"
 
